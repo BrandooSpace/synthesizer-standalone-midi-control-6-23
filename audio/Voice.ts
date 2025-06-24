@@ -28,10 +28,9 @@ interface SubOscillatorUnit {
 
 interface ModSlotConnection {
   sourceNode?: AudioNode | null;
-  targetParam?: AudioParam | null; // Could be single AudioParam or array for XY targets
+  targetParam?: AudioParam | null;
   slotGainNode: GainNode;
-  isNumericMod?: boolean; // True if this slot modulates a numeric JS param (e.g., envelope times)
-  // Store what was connected to properly disconnect
+  isNumericMod?: boolean;
   connectedSourceType?: ModSource;
   connectedDestinationType?: ModDestination;
 }
@@ -64,7 +63,7 @@ export class Voice {
   private lfoGain: GainNode;
   private lfoCustomShapeCurve: Float32Array | null = null;
   private lfoStartTime: number = 0;
-  private currentLfoParamsForModulation: LfoParams; // For internal LFO value calculation
+  private currentLfoParamsForModulation: LfoParams;
   private lfoHasBeenStarted: boolean = false;
 
 
@@ -75,8 +74,8 @@ export class Voice {
 
   // Modulation Matrix related
   private modSlotGains: GainNode[];
-  private modVcaGainX: GainNode; // VCA level for X path, can be modulated
-  private modVcaGainY: GainNode; // VCA level for Y path, can be modulated
+  private modVcaGainX: GainNode;
+  private modVcaGainY: GainNode;
   private modSlotConnections: (ModSlotConnection | null)[];
   private velocityModConstantSource: ConstantSourceNode | null = null;
   private modWheelConstantSource: ConstantSourceNode;
@@ -343,40 +342,40 @@ export class Voice {
 
   public noteOff(envParams: EnvelopeParams, time: number, immediateDispose: boolean = false): void {
     if (this.isDisposed) return;
-    const t = time;
+    const t = this.audioContext.currentTime;
 
+    // CLICKING FIX: Differentiated logic for stolen vs. normal note off
+    if (immediateDispose) {
+        const veryShortRelease = 0.015; // 15ms is fast but avoids clicks
+        this.mainEnvelopeVcaX.gain.cancelScheduledValues(t);
+        this.mainEnvelopeVcaY.gain.cancelScheduledValues(t);
+        this.noiseVcaGain.gain.cancelScheduledValues(t);
+        this.envelopeSignalOutput.gain.cancelScheduledValues(t);
+
+        // Use setTargetAtTime for a fast exponential decay, which is less clicky
+        this.mainEnvelopeVcaX.gain.setTargetAtTime(0, t, veryShortRelease / 4);
+        this.mainEnvelopeVcaY.gain.setTargetAtTime(0, t, veryShortRelease / 4);
+        this.envelopeSignalOutput.gain.setTargetAtTime(0, t, veryShortRelease / 4);
+        this.noiseVcaGain.gain.setTargetAtTime(0, t, veryShortRelease / 4);
+        
+        const stopTime = t + veryShortRelease * 2;
+        this.subOscsX.forEach(unit => { if(!unit.isWorklet) try { (unit.osc as OscillatorNode).stop(stopTime); } catch(e){} });
+        this.subOscsY.forEach(unit => { if(!unit.isWorklet) try { (unit.osc as OscillatorNode).stop(stopTime); } catch(e){} });
+        if (this.lfoHasBeenStarted) try { this.lfo.stop(stopTime); } catch(e){}
+        
+        setTimeout(() => this.dispose(), (stopTime - t) * 1000 + 50);
+        return; // Exit here, don't run the normal release logic.
+    }
+
+    // Normal release logic for non-stolen notes
     const { effectiveRelease } = this._getModulatedEnvelopeParams(
-        envParams, // Base envelope params
-        this.currentModMatrixParams, // Current mod matrix state
-        this._modWheelValue,
-        this._velocity,
-        t // Current time for LFO calculation if needed
+        envParams, this.currentModMatrixParams, this._modWheelValue, this._velocity, t
     );
-
-    let actualAudibleReleaseTime;
-    if (immediateDispose) {
-        actualAudibleReleaseTime = MIN_ENV_TIME; // Force a very short audible release
-    } else {
-        actualAudibleReleaseTime = envParams.isEnvelopeEnabled ? Math.max(MIN_ENV_TIME, effectiveRelease) : RAMP_TIME;
-    }
-    
+    const actualAudibleReleaseTime = envParams.isEnvelopeEnabled ? Math.max(MIN_ENV_TIME, effectiveRelease) : RAMP_TIME;
     const gainStopTime = t + actualAudibleReleaseTime;
-
-    // Determine when to stop the audio nodes and schedule disposal
-    let nodeStopTime: number;
-    let timeUntilDisposeMs: number;
-
-    if (immediateDispose) {
-      nodeStopTime = gainStopTime + 0.001; // Oscs stop almost immediately after gain ramp for fast dispose
-      timeUntilDisposeMs = (nodeStopTime - this.audioContext.currentTime + 0.01) * 1000; // Small buffer
-    } else {
-      nodeStopTime = gainStopTime + 0.05; // Normal: oscs stop 50ms after gain reaches zero
-      timeUntilDisposeMs = (nodeStopTime - this.audioContext.currentTime + 0.1) * 1000; // Larger buffer
-    }
-
-
+    
     this.mainEnvelopeVcaX.gain.cancelScheduledValues(t);
-    this.mainEnvelopeVcaX.gain.setValueAtTime(this.mainEnvelopeVcaX.gain.value, t); // Hold current value
+    this.mainEnvelopeVcaX.gain.setValueAtTime(this.mainEnvelopeVcaX.gain.value, t);
     this.mainEnvelopeVcaX.gain.linearRampToValueAtTime(0, gainStopTime);
 
     this.mainEnvelopeVcaY.gain.cancelScheduledValues(t);
@@ -391,41 +390,18 @@ export class Voice {
     this.noiseVcaGain.gain.setValueAtTime(this.noiseVcaGain.gain.value, t);
     this.noiseVcaGain.gain.linearRampToValueAtTime(0, gainStopTime);
 
-    // Schedule stop for standard oscillators
-    this.subOscsX.forEach(unit => {
-      if (!unit.isWorklet && unit.hasBeenStarted) {
-        const actualOscStopTime = Math.max((unit.osc as OscillatorNode).context.currentTime, nodeStopTime);
-        try { (unit.osc as OscillatorNode).stop(actualOscStopTime); } catch(e){}
-        unit.hasBeenStarted = false; // Mark as stopped
-      }
-    });
-    this.subOscsY.forEach(unit => {
-      if (!unit.isWorklet && unit.hasBeenStarted) {
-        const actualOscStopTime = Math.max((unit.osc as OscillatorNode).context.currentTime, nodeStopTime);
-        try { (unit.osc as OscillatorNode).stop(actualOscStopTime); } catch(e){}
-        unit.hasBeenStarted = false;
-      }
-    });
+    const nodeStopTime = gainStopTime + 0.05;
+    const timeUntilDisposeMs = (nodeStopTime - this.audioContext.currentTime + 0.1) * 1000;
 
-    // Schedule stop for LFO
-    if (this.lfoHasBeenStarted) {
-        const actualLfoStopTime = Math.max(this.lfo.context.currentTime, nodeStopTime);
-        try { this.lfo.stop(actualLfoStopTime); } catch(e) {}
-        this.lfoHasBeenStarted = false;
-    }
+    this.subOscsX.forEach(unit => { if (!unit.isWorklet && unit.hasBeenStarted) try { (unit.osc as OscillatorNode).stop(nodeStopTime); } catch(e){} });
+    this.subOscsY.forEach(unit => { if (!unit.isWorklet && unit.hasBeenStarted) try { (unit.osc as OscillatorNode).stop(nodeStopTime); } catch(e){} });
+    if (this.lfoHasBeenStarted) try { this.lfo.stop(nodeStopTime); } catch(e){}
     
-    // Schedule disposal of the voice object
-    if (timeUntilDisposeMs > 0) {
-        setTimeout(() => this.dispose(), timeUntilDisposeMs);
-    } else {
-        // Ensure dispose is async if calculated time is immediate or negative
-        setTimeout(() => this.dispose(), 10); 
-    }
+    setTimeout(() => this.dispose(), Math.max(10, timeUntilDisposeMs));
   }
 
   public updateUserWavetables(newUserWavetables: Record<string, UserWavetable>): void {
     this.userWavetables = newUserWavetables;
-    // No immediate audio graph changes needed here, will be picked up on next osc update
   }
 
   public updateOscillatorParams(params: OscillatorParams, time: number): void {
@@ -450,9 +426,8 @@ export class Voice {
                 unit.osc.disconnect(); unit.vca.disconnect(); unit.panner?.disconnect();
             });
             const newUnits = this._createSubOscillatorUnits(params, oscPath, t);
-            // Start new standard oscillators if they are part of new units
             newUnits.forEach(unit => {
-                if (!unit.isWorklet) { // Worklets are implicitly "started" by existing or don't have a start method
+                if (!unit.isWorklet) {
                     try { (unit.osc as OscillatorNode).start(t); } catch(e){}
                     unit.hasBeenStarted = true;
                 }
@@ -478,10 +453,9 @@ export class Voice {
     ) => {
         units.forEach((unit, i) => {
             let detuneOffset = 0;
-            // FIX: Guard against division by zero when numVoices is 1
             if (numVoices > 1) {
                 detuneOffset = (i / (numVoices - 1) - 0.5) * 2 * detuneRangeCents;
-                if (oscPath === 'Y') detuneOffset *= 0.9; // Slightly different detune for Y
+                if (oscPath === 'Y') detuneOffset *= 0.9;
             }
             const freq = this._baseFrequency * ratio;
 
@@ -553,7 +527,6 @@ export class Voice {
             }
 
             if (unit.panner) {
-                // FIX: Guard against division by zero when numVoices is 1
                 let panValue = 0;
                 if (numVoices > 1 && params.unisonSpread > 0) {
                     panValue = (i / (numVoices - 1) - 0.5) * 2 * params.unisonSpread;
@@ -570,7 +543,7 @@ export class Voice {
     processOscillatorUnits(this.subOscsY, params.waveformY, params.yRatio, params.wavetableY, params.wavetablePositionX, params.wavetablePositionY, 'Y');
 
     // Update phase shift
-    const actualYBaseFreq = this._baseFrequency * params.yRatio || 1; // Avoid division by zero
+    const actualYBaseFreq = this._baseFrequency * params.yRatio || 1;
     const phaseDelayTime = (params.phaseShift / 360) / actualYBaseFreq;
     this.phaseDelay.delayTime.cancelScheduledValues(t);
     this.phaseDelay.delayTime.setValueAtTime(this.phaseDelay.delayTime.value, t);
@@ -586,7 +559,6 @@ export class Voice {
     const rampTargetTime = t + RAMP_TIME;
     const { isFilterEnabled, filterType, cutoffFrequency, resonance, keytrackAmount } = params;
 
-    // Calculate keytracked cutoff
     let finalCutoffFrequency = cutoffFrequency;
     if (keytrackAmount !== 0) {
       const pitchDeltaHalftones = 12 * Math.log2(this._baseFrequency / C4_FREQ);
@@ -598,97 +570,67 @@ export class Voice {
     if (isFilterEnabled) {
       this.filterX.type = filterType as BiquadFilterType;
       this.filterY.type = filterType as BiquadFilterType;
-
-      this.filterX.frequency.cancelScheduledValues(t);
-      this.filterX.frequency.setValueAtTime(this.filterX.frequency.value, t);
-      this.filterX.frequency.linearRampToValueAtTime(finalCutoffFrequency, rampTargetTime);
-
-      this.filterY.frequency.cancelScheduledValues(t);
-      this.filterY.frequency.setValueAtTime(this.filterY.frequency.value, t);
-      this.filterY.frequency.linearRampToValueAtTime(finalCutoffFrequency, rampTargetTime);
-
-      this.filterX.Q.cancelScheduledValues(t);
-      this.filterX.Q.setValueAtTime(this.filterX.Q.value, t);
-      this.filterX.Q.linearRampToValueAtTime(resonance, rampTargetTime);
-
-      this.filterY.Q.cancelScheduledValues(t);
-      this.filterY.Q.setValueAtTime(this.filterY.Q.value, t);
-      this.filterY.Q.linearRampToValueAtTime(resonance, rampTargetTime);
-
+      this.filterX.frequency.setTargetAtTime(finalCutoffFrequency, t, RAMP_TIME);
+      this.filterY.frequency.setTargetAtTime(finalCutoffFrequency, t, RAMP_TIME);
+      this.filterX.Q.setTargetAtTime(resonance, t, RAMP_TIME);
+      this.filterY.Q.setTargetAtTime(resonance, t, RAMP_TIME);
     } else {
-      // Bypass filter by setting it to a transparent state (e.g., lowpass wide open)
-      const bypassFreq = this.audioContext.sampleRate / 2; // Max frequency
-      const bypassRes = 0.0001; // Minimal resonance
-      this.filterX.type = FilterNodeType.LOW_PASS as BiquadFilterType; // Default to LP for bypass
-      this.filterX.frequency.cancelScheduledValues(t);
-      this.filterX.frequency.setValueAtTime(this.filterX.frequency.value, t);
-      this.filterX.frequency.linearRampToValueAtTime(bypassFreq, rampTargetTime);
-      this.filterX.Q.cancelScheduledValues(t);
-      this.filterX.Q.setValueAtTime(this.filterX.Q.value, t);
-      this.filterX.Q.linearRampToValueAtTime(bypassRes, rampTargetTime);
-
+      const bypassFreq = this.audioContext.sampleRate / 2;
+      const bypassRes = 0.0001;
+      this.filterX.type = FilterNodeType.LOW_PASS as BiquadFilterType;
+      this.filterX.frequency.setTargetAtTime(bypassFreq, t, RAMP_TIME);
+      this.filterX.Q.setTargetAtTime(bypassRes, t, RAMP_TIME);
       this.filterY.type = FilterNodeType.LOW_PASS as BiquadFilterType;
-      this.filterY.frequency.cancelScheduledValues(t);
-      this.filterY.frequency.setValueAtTime(this.filterY.frequency.value, t);
-      this.filterY.frequency.linearRampToValueAtTime(bypassFreq, rampTargetTime);
-      this.filterY.Q.cancelScheduledValues(t);
-      this.filterY.Q.setValueAtTime(this.filterY.Q.value, t);
-      this.filterY.Q.linearRampToValueAtTime(bypassRes, rampTargetTime);
+      this.filterY.frequency.setTargetAtTime(bypassFreq, t, RAMP_TIME);
+      this.filterY.Q.setTargetAtTime(bypassRes, t, RAMP_TIME);
     }
   }
 
   private getTempoSyncedRate(division: string, bpm: number): number {
     const parts = division.split('/');
-    if (parts.length !== 2) return 1; // Default to 1 Hz if format is wrong
+    if (parts.length !== 2) return 1;
 
     const numerator = parseInt(parts[0], 10);
-    let denominator = parseInt(parts[1].replace(/[TD]/, ''), 10); // Remove T or D for parsing
+    let denominator = parseInt(parts[1].replace(/[TD]/, ''), 10);
 
     if (isNaN(numerator) || isNaN(denominator) || denominator === 0) return 1;
 
     let multiplier = 1.0;
-    if (parts[1].includes('T')) multiplier = 2/3; // Triplet
-    if (parts[1].includes('D')) multiplier = 1.5; // Dotted
+    if (parts[1].includes('T')) multiplier = 2/3;
+    if (parts[1].includes('D')) multiplier = 1.5;
 
-    // Calculate duration of one such note division in seconds
-    const beatsPerBar = 4; // Assuming 4/4 time for simplicity of "bar" reference
+    const beatsPerBar = 4;
     const noteDurationInBeats = (beatsPerBar / denominator) * numerator * multiplier;
     const noteDurationInSeconds = (60 / bpm) * noteDurationInBeats;
     
-    return noteDurationInSeconds > 0 ? 1 / noteDurationInSeconds : 1; // Avoid division by zero
+    return noteDurationInSeconds > 0 ? 1 / noteDurationInSeconds : 1;
   }
 
   private generateLfoCurve(shape: Waveform, durationSeconds: number, rateHz: number): Float32Array {
-    // Duration here is one cycle of the LFO
-    // Number of points in the curve. More points = smoother for complex shapes, but more memory.
-    // For low frequency LFOs, fewer points might be fine. Let's aim for decent resolution.
-    const numPoints = Math.max(32, Math.floor(this.audioContext.sampleRate * durationSeconds / 20)); // At least 32 points, or ~50 samples per LFO cycle at 20Hz LFO
+    const numPoints = Math.max(32, Math.floor(this.audioContext.sampleRate * durationSeconds / 20));
     const curve = new Float32Array(numPoints);
     const stepDuration = durationSeconds / numPoints;
 
     if (shape === Waveform.SAMPLE_HOLD) {
       let lastValue = Math.random() * 2 - 1;
       for (let i = 0; i < numPoints; i++) {
-        // Change value at the start of each "sample" period
-        if (i === 0 || (i * stepDuration * rateHz) % 1 < (stepDuration * rateHz)) { // Approximation of sample change
+        if (i === 0 || (i * stepDuration * rateHz) % 1 < (stepDuration * rateHz)) {
             lastValue = Math.random() * 2 - 1;
         }
         curve[i] = lastValue;
       }
     } else if (shape === Waveform.RANDOM_SMOOTH) {
-        // Generate a few random points and interpolate between them for one LFO cycle
-        const numRandomPoints = Math.max(2, Math.floor(durationSeconds * rateHz * 2) +1); // At least 2 points, more for faster LFOs
+        const numRandomPoints = Math.max(2, Math.floor(durationSeconds * rateHz * 2) +1);
         const randomValues = Array.from({ length: numRandomPoints }, () => Math.random() * 2 - 1);
         
         for (let i = 0; i < numPoints; i++) {
-            const positionInCycle = (i / (numPoints -1 )) * (numRandomPoints -1); // Map current point to randomValues index
+            const positionInCycle = (i / (numPoints -1 )) * (numRandomPoints -1);
             const index1 = Math.floor(positionInCycle);
             const index2 = Math.min(numRandomPoints -1, Math.ceil(positionInCycle));
             const t_interp = positionInCycle - index1;
             curve[i] = randomValues[index1] * (1 - t_interp) + randomValues[index2] * t_interp;
         }
     }
-    // Other custom shapes could be added here.
     return curve;
   }
 
@@ -697,45 +639,31 @@ export class Voice {
     if (this.isDisposed) return;
     const t = time;
     const rampTargetTime = t + RAMP_TIME;
-    this.currentLfoParamsForModulation = { ...lfoParams }; // Store for internal calculations
-
+    this.currentLfoParamsForModulation = { ...lfoParams };
 
     let lfoRate = lfoParams.rate || 1;
     if (lfoParams.isTempoSynced && lfoParams.tempoSyncDivision) {
       lfoRate = this.getTempoSyncedRate(lfoParams.tempoSyncDivision, this.globalBpm);
     }
 
-    // Handle LFO waveform type
-    if (lfoParams.waveform === Waveform.SINE || lfoParams.waveform === Waveform.SQUARE ||
-        lfoParams.waveform === Waveform.SAWTOOTH || lfoParams.waveform === Waveform.TRIANGLE) {
+    if ([Waveform.SINE, Waveform.SQUARE, Waveform.SAWTOOTH, Waveform.TRIANGLE].includes(lfoParams.waveform)) {
       PeriodicWaveUtils.applyWaveformToNode(this.audioContext, this.lfo, lfoParams.waveform, this.periodicWaves);
-      this.lfo.frequency.cancelScheduledValues(t);
-      this.lfo.frequency.setValueAtTime(this.lfo.frequency.value, t);
-      this.lfo.frequency.linearRampToValueAtTime(lfoRate, rampTargetTime);
-      this.lfoCustomShapeCurve = null; // Clear custom curve if not used
-    } else if (lfoParams.waveform === Waveform.SAMPLE_HOLD || lfoParams.waveform === Waveform.RANDOM_SMOOTH) {
-      // For custom shapes, we might not use the OscillatorNode's frequency directly if we're driving it via setValueCurveAtTime.
-      // However, setting frequency helps if setValueCurveAtTime is not supported or for timing calculations.
-      this.lfo.frequency.cancelScheduledValues(t);
-      this.lfo.frequency.setValueAtTime(this.lfo.frequency.value, t);
-      this.lfo.frequency.linearRampToValueAtTime(lfoRate, rampTargetTime); // LFO rate sets the cycle speed
-
-      const cycleDuration = lfoRate > 0 ? 1.0 / lfoRate : 1.0; // Duration of one LFO cycle
+      this.lfo.frequency.setTargetAtTime(lfoRate, t, RAMP_TIME);
+      this.lfoCustomShapeCurve = null;
+    } else if ([Waveform.SAMPLE_HOLD, Waveform.RANDOM_SMOOTH].includes(lfoParams.waveform)) {
+      this.lfo.frequency.setTargetAtTime(lfoRate, t, RAMP_TIME);
+      const cycleDuration = lfoRate > 0 ? 1.0 / lfoRate : 1.0;
       this.lfoCustomShapeCurve = this.generateLfoCurve(lfoParams.waveform, cycleDuration, lfoRate);
-      // The actual application of this curve happens in _applyLfoToTargets or similar logic, potentially via setValueCurveAtTime on lfoGain.
     }
-    // else: other custom waveforms could be handled here
 
-    // Disconnect LFO from all previous targets before reconnecting
     try { this.lfoGain.disconnect(); } catch (e) {}
 
     let targetGainValue = 0;
-    if (lfoParams.target !== LfoTarget.OFF && filterParams.isFilterEnabled) { // Only modulate if filter (and LFO section) is enabled
+    if (lfoParams.target !== LfoTarget.OFF && filterParams.isFilterEnabled) {
       targetGainValue = lfoParams.depth;
 
       const connectLfoToParam = (param: AudioParam | undefined) => {
-        if (this.isDisposed || !param) return;
-        try { this.lfoGain.connect(param); } catch(e) { console.error("Failed to connect LFO to param", param, e); }
+        if (!this.isDisposed && param) try { this.lfoGain.connect(param); } catch(e) { console.error("Failed to connect LFO to param", param, e); }
       };
 
       switch (lfoParams.target) {
@@ -752,48 +680,20 @@ export class Voice {
             connectLfoToParam(this.filterY.frequency);
             break;
         case LfoTarget.PHASE:
-          targetGainValue = lfoParams.depth * 0.01; // Scale depth for phase (e.g. 0-1 depth -> 0-0.01s delay)
+          targetGainValue = lfoParams.depth * 0.01;
           connectLfoToParam(this.phaseDelay.delayTime);
           break;
         case LfoTarget.OSC_X_WAVETABLE_POS:
-            this.subOscsX.forEach(unit => {
-                if (unit.isWorklet) connectLfoToParam(this._getOscParam(unit, 'morphPositionX'));
-            });
+            this.subOscsX.forEach(unit => { if (unit.isWorklet) connectLfoToParam(this._getOscParam(unit, 'morphPositionX')); });
             break;
         case LfoTarget.OSC_Y_WAVETABLE_POS:
-            this.subOscsY.forEach(unit => {
-                if (unit.isWorklet) connectLfoToParam(this._getOscParam(unit, 'morphPositionY'));
-            });
+            this.subOscsY.forEach(unit => { if (unit.isWorklet) connectLfoToParam(this._getOscParam(unit, 'morphPositionY')); });
             break;
-        default: targetGainValue = 0; break; // LfoTarget.OFF or unhandled
+        default: targetGainValue = 0; break;
       }
     }
-
-    // Apply depth to lfoGain
-    this.lfoGain.gain.cancelScheduledValues(t);
-    this.lfoGain.gain.setValueAtTime(this.lfoGain.gain.value, t);
-
-    if (this.lfoCustomShapeCurve && this.lfoCustomShapeCurve.length > 0 &&
-        (lfoParams.waveform === Waveform.SAMPLE_HOLD || lfoParams.waveform === Waveform.RANDOM_SMOOTH) &&
-        filterParams.isFilterEnabled && lfoParams.target !== LfoTarget.OFF) {
-      // For custom curve LFOs, the lfoGain's value is shaped by the curve directly.
-      // The 'targetGainValue' (depth) scales the curve.
-      const scaledCurve = this.lfoCustomShapeCurve.map(val => val * targetGainValue);
-      const cycleDuration = lfoRate > 0 ? 1.0 / lfoRate : 1.0; // Recalculate for safety
-      try {
-        // Attempt to use setValueCurveAtTime for smoother custom LFOs if supported and needed.
-        // This is complex because the lfoGain is *already connected* to the target param.
-        // What we want is for the *output* of the LFO (before lfoGain) to be shaped, then scaled by lfoGain.
-        // The current setup is Oscillator -> lfoGain -> Target.
-        // If lfoGain's value itself is shaped by setValueCurveAtTime, it scales the LFO oscillator's output.
-        this.lfoGain.gain.setValueCurveAtTime(scaledCurve, t, cycleDuration);
-      } catch (e) {
-        // Fallback if setValueCurveAtTime fails or for simpler implementation for now
-        this.lfoGain.gain.linearRampToValueAtTime(targetGainValue, rampTargetTime);
-      }
-    } else {
-      this.lfoGain.gain.linearRampToValueAtTime(targetGainValue, rampTargetTime);
-    }
+    
+    this.lfoGain.gain.setTargetAtTime(targetGainValue, t, RAMP_TIME);
   }
 
   private _disconnectSlot(slotIndex: number): void {
@@ -806,13 +706,9 @@ export class Voice {
         if (connection.sourceNode) {
           connection.sourceNode.disconnect(slotGainNode);
         }
-        // Disconnect from the specific target(s) it was connected to
         if (connection.targetParam) {
           slotGainNode.disconnect(connection.targetParam);
         } else {
-          // Fallback: If no specific targetParam was stored (e.g., for XY combined targets),
-          // try to disconnect from all potential previous targets based on last applied config.
-          // This part can be made more precise if _connectSlot stores more info.
           const lastSlotConfig = this.lastAppliedModMatrixParamsForStructure.slots[slotIndex];
           if (lastSlotConfig) {
             switch (lastSlotConfig.destination) {
@@ -828,31 +724,17 @@ export class Voice {
                 try { slotGainNode.disconnect(this.modVcaGainX.gain); } catch(e) {}
                 try { slotGainNode.disconnect(this.modVcaGainY.gain); } catch(e) {}
                 break;
-              // Add other multi-target cases if any
             }
           }
         }
-      } catch (e) {
-        // console.warn(`Error disconnecting slot ${slotIndex}:`, e);
-      }
+      } catch (e) {}
     }
-    // Reset gain and clear connection info
-    this.modSlotGains[slotIndex].gain.cancelScheduledValues(this.audioContext.currentTime);
-    this.modSlotGains[slotIndex].gain.setValueAtTime(0, this.audioContext.currentTime);
+    this.modSlotGains[slotIndex].gain.setTargetAtTime(0, this.audioContext.currentTime, RAMP_TIME);
     this.modSlotConnections[slotIndex] = null;
   }
 
 
-  private _connectSlot(
-    slotIndex: number,
-    slotConfig: ModMatrixSlot,
-    currentOscParams: OscillatorParams,
-    // currentFilterParams: FilterParams, // Not directly needed for connections, but for scaling
-    // currentLfoParams: LfoParams,
-    // currentEnvParams: EnvelopeParams,
-    // currentModWheelValue: number,
-    timeValue: number
-  ): void {
+  private _connectSlot(slotIndex: number, slotConfig: ModMatrixSlot, currentOscParams: OscillatorParams, timeValue: number): void {
     if (this.isDisposed || !slotConfig.isEnabled || slotConfig.source === ModSource.NONE || slotConfig.destination === ModDestination.NONE) {
       return;
     }
@@ -877,9 +759,10 @@ export class Voice {
     }
 
     if (!sourceAudioNode) {
-        this.modSlotConnections[slotIndex] = null; // Ensure connection is cleared
+        this.modSlotConnections[slotIndex] = null;
         return;
     }
+    
 
     // Check if this destination is a numeric JS parameter (e.g., envelope times)
     if (slotConfig.destination === ModDestination.ENV1_ATTACK ||

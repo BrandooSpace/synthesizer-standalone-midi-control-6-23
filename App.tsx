@@ -7,7 +7,7 @@ import {
   HighPassFilterInsertParams, BandPassFilterInsertParams, NotchFilterInsertParams, InsertEffectId,
   CompressorParams, ThreeBandEqParams, LadderFilterParams, ModMatrixParams, SynthPreset,
   MidiMappings, MidiMappingEntry, ModSource, ModDestination, LfoTarget, UserWavetable, WavetableOption,
-  CategorizedSidebarEffectGroup, MidiDeviceRole, DetectedMidiDevice, MidiDeviceAssignments 
+  CategorizedSidebarEffectGroup, MidiDeviceRole, DetectedMidiDevice, MidiDeviceAssignments, AllInstrumentParams 
 } from './types';
 import {
   DEFAULT_OSCILLATOR_PARAMS, DEFAULT_FILTER_PARAMS, DEFAULT_LFO_PARAMS, DEFAULT_ENVELOPE_PARAMS,
@@ -65,7 +65,6 @@ interface AppAnalysersState {
 
 const HELP_BOX_HEIGHT_REM = 2.5; 
 const DEFAULT_HELP_TEXT = "Hover over a control to see its description.";
-const THROTTLE_DELAY_MS = 16; // Approx 60 FPS for smoother updates
 
 
 const resampleLinear = (originalSamples: Float32Array, targetLength: number): Float32Array => {
@@ -184,8 +183,10 @@ const App: React.FC = () => {
   const [currentSampleRate, setCurrentSampleRate] = useState<number>(0);
   const [isMasterLimiterEnabled, setIsMasterLimiterEnabled] = useState<boolean>(true);
   const [limiterThresholdDb, setLimiterThresholdDb] = useState<number>(-6);
+  
+  // THROTTLING FIX: Use requestAnimationFrame instead of setTimeout
   const throttledParamUpdatesRef = useRef<Record<string, { value: number; sourceDeviceId?: string }>>({});
-  const throttleTimeoutRef = useRef<number | null>(null);
+  const animationFrameIdRef = useRef<number | null>(null);
 
   // Show a non-blocking notification
   const showNotification = useCallback((message: string, type: 'success' | 'error' = 'success', duration = 3000) => {
@@ -313,15 +314,15 @@ const App: React.FC = () => {
   const handleVoiceCountChange = useCallback((count: number) => { setActiveVoiceCount(count); }, []);
   const handleVoiceSteal = useCallback(() => { setVoiceStealIndicatorActive(true); if (voiceStealTimeoutRef.current) clearTimeout(voiceStealTimeoutRef.current); voiceStealTimeoutRef.current = window.setTimeout(() => setVoiceStealIndicatorActive(false), 500); }, []);
   
-  // UNISON BUG FIX: This handler now ONLY sets state.
   const handleOscParamsChange = useCallback((newParams: OscillatorParams | ((prev: OscillatorParams) => OscillatorParams)) => {
     setOscParams(newParams);
     setIsPresetDirty(true);
   }, []);
 
-  // UNISON BUG FIX: This useEffect pushes the confirmed state to the audio engine.
   useEffect(() => {
-    audioEngine?.updateOscillatorParams(oscParams);
+    if(audioEngine) {
+      audioEngine.updateOscillatorParams(oscParams);
+    }
   }, [oscParams, audioEngine]);
 
 
@@ -355,7 +356,7 @@ const App: React.FC = () => {
       const tableId = `user_osc${oscType}_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
       const newUserWavetable: UserWavetable = { id: tableId, name: file.name, data: resampledSamples };
       setUserWavetables(prev => ({ ...prev, [tableId]: newUserWavetable })); setUserLoadedWavetableNames(prev => ({ ...prev, [oscType.toLowerCase()]: file.name }));
-      handleOscParamsChange(prevOscParams => { const newOscParams = { ...prevOscParams, ...(oscType === 'X' ? { waveformX: Waveform.WAVETABLE, wavetableX: tableId } : {}), ...(oscType === 'Y' ? { waveformY: Waveform.WAVETABLE, wavetableY: tableId } : {}), }; return newOscParams; });
+      handleOscParamsChange(prevOscParams => ({ ...prevOscParams, ...(oscType === 'X' ? { waveformX: Waveform.WAVETABLE, wavetableX: tableId } : { waveformY: Waveform.WAVETABLE, wavetableY: tableId }) }));
       showNotification(`Loaded and resampled "${file.name}" for Oscillator ${oscType}.`);
     } catch (error) { console.error("Error loading or decoding custom WAV:", error); showNotification(`Failed to load custom WAV: ${error instanceof Error ? error.message : String(error)}`, 'error'); if (tempAudioContext.state !== 'closed') await tempAudioContext.close(); }
   }, [audioEngine, showNotification, handleOscParamsChange]); 
@@ -519,16 +520,13 @@ const App: React.FC = () => {
         dispatchParameterUpdate(paramId, data.value);
     });
     throttledParamUpdatesRef.current = {};
-    if (throttleTimeoutRef.current) {
-        clearTimeout(throttleTimeoutRef.current);
-        throttleTimeoutRef.current = null;
-    }
+    animationFrameIdRef.current = null;
   }, [dispatchParameterUpdate]);
 
   useEffect(() => {
     return () => {
-        if (throttleTimeoutRef.current) {
-            clearTimeout(throttleTimeoutRef.current);
+        if (animationFrameIdRef.current) {
+            cancelAnimationFrame(animationFrameIdRef.current);
         }
     };
   }, []);
@@ -603,8 +601,8 @@ const App: React.FC = () => {
             sourceDeviceId,
         };
 
-        if (throttleTimeoutRef.current === null) {
-            throttleTimeoutRef.current = window.setTimeout(processThrottledUpdates, THROTTLE_DELAY_MS);
+        if (animationFrameIdRef.current === null) {
+            animationFrameIdRef.current = requestAnimationFrame(processThrottledUpdates);
         }
       }
     }
@@ -707,15 +705,8 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const currentAudioEngine = audioEngine;
-    const currentMidiAccess = midiAccessRef.current;
-    const currentActiveInputs = activeMidiInputsRef.current;
-
     return () => {
       if (currentAudioEngine) currentAudioEngine.dispose();
-      if (currentMidiAccess) {
-        currentActiveInputs.forEach(input => input.onmidimessage = null);
-      }
-      activeMidiInputsRef.current.clear();
     };
   }, [audioEngine]); 
 
@@ -775,7 +766,6 @@ const App: React.FC = () => {
         </div>
       )}
       
-      {/* --- Notification Banner --- */}
       {notification && (
         <div 
           className={`fixed top-16 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-lg shadow-2xl transition-all duration-300 ${
