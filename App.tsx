@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { AudioEngine } from './audio/AudioEngine';
 import {
@@ -64,8 +63,6 @@ interface AppAnalysersState {
   reverbSendInputAnalyser: AnalyserNode | null;
 }
 
-const RIGHT_SIDEBAR_WIDTH_PX = 350;
-// const LEFT_SIDEBAR_WIDTH_PX = 288; // No longer needed for canvas sizing
 const HELP_BOX_HEIGHT_REM = 2.5; 
 const DEFAULT_HELP_TEXT = "Hover over a control to see its description.";
 const THROTTLE_DELAY_MS = 33; // For MIDI CC updates, approx 30 FPS
@@ -114,6 +111,7 @@ const App: React.FC = () => {
   const [audioEngine, setAudioEngine] = useState<AudioEngine | null>(null);
   const [isAudioInitialized, setIsAudioInitialized] = useState(false);
 
+  // Parameter States
   const [oscParams, setOscParams] = useState<OscillatorParams>(DEFAULT_OSCILLATOR_PARAMS);
   const [filterParams, setFilterParams] = useState<FilterParams>(DEFAULT_FILTER_PARAMS);
   const [lfoParams, setLfoParams] = useState<LfoParams>(DEFAULT_LFO_PARAMS);
@@ -141,71 +139,73 @@ const App: React.FC = () => {
   const [userWavetables, setUserWavetables] = useState<Record<string, UserWavetable>>({});
   const [userLoadedWavetableNames, setUserLoadedWavetableNames] = useState<{ x?: string, y?: string }>({});
 
-  const [appAnalysers, setAppAnalysers] = useState<AppAnalysersState>({
-    masterPreLimiterAnalyser: null,
-    masterPostLimiterAnalyser: null,
-    preInsertChainAnalyser: null,
-    delaySendInputAnalyser: null,
-    reverbSendInputAnalyser: null,
-  });
+  // Analyser and UI States
+  const [appAnalysers, setAppAnalysers] = useState<AppAnalysersState>({ masterPreLimiterAnalyser: null, masterPostLimiterAnalyser: null, preInsertChainAnalyser: null, delaySendInputAnalyser: null, reverbSendInputAnalyser: null });
   const [insertEffectAnalysers, setInsertEffectAnalysers] = useState<Map<InsertEffectId, AnalyserNode | null>>(new Map());
-
   const [areSidebarsVisible, setAreSidebarsVisible] = useState(true);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(true);
   const [activeKeys, setActiveKeys] = useState<Set<string>>(new Set());
   const [octave, setOctave] = useState<number>(0);
-
   const [activeEffectsInSidebar, setActiveEffectsInSidebar] = useState<Set<string>>(new Set(['oscillators']));
-
   const [isOscilloscopeDrawingActive, setIsOscilloscopeDrawingActive] = useState(false);
   const oscilloscopeHoldTimerRef = useRef<number | null>(null);
-
   const [currentHelpText, setCurrentHelpText] = useState<string>(DEFAULT_HELP_TEXT);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const notificationTimeoutRef = useRef<number | null>(null);
 
-  // MIDI State
+  // MIDI States
   const [isMidiSystemInitialized, setIsMidiSystemInitialized] = useState(false);
   const midiAccessRef = useRef<MIDIAccess | null>(null);
   const activeMidiInputsRef = useRef<Map<string, MIDIInput>>(new Map());
   const [detectedMidiInputs, setDetectedMidiInputs] = useState<DetectedMidiDevice[]>([]);
   const [midiDeviceAssignments, setMidiDeviceAssignments] = useState<MidiDeviceAssignments>(DEFAULT_MIDI_DEVICE_ASSIGNMENTS);
   const [isMidiSystemReady, setIsMidiSystemReady] = useState(false); 
-
   const [globalClipActive, setGlobalClipActive] = useState(false);
   const globalClipTimeoutRef = useRef<number | null>(null);
   const [showMidiLearnBanner, setShowMidiLearnBanner] = useState(false);
   const [midiLearnTargetDeviceName, setMidiLearnTargetDeviceName] = useState<string | null>(null);
-
-
-  const [activeVoiceCount, setActiveVoiceCount] = useState<number>(0);
-  const [voiceStealIndicatorActive, setVoiceStealIndicatorActive] = useState<boolean>(false);
-  const voiceStealTimeoutRef = useRef<number | null>(null);
-
-  const [presets, setPresets] = useState<SynthPreset[]>([]);
-  const [currentPresetName, setCurrentPresetName] = useState<string>(DEFAULT_PRESET_NAME);
-  const [isPresetDirty, setIsPresetDirty] = useState<boolean>(false);
-
   const [midiMappings, setMidiMappings] = useState<MidiMappings>(DEFAULT_MIDI_MAPPINGS);
   const [midiLearnActive, setMidiLearnActive] = useState<boolean>(false);
   const [paramIdToLearn, setParamIdToLearn] = useState<string | null>(null);
   const [paramMinMaxToLearn, setParamMinMaxToLearn] = useState<{min: number, max: number} | null>(null);
 
+  // Voice and Preset States
+  const [activeVoiceCount, setActiveVoiceCount] = useState<number>(0);
+  const [voiceStealIndicatorActive, setVoiceStealIndicatorActive] = useState<boolean>(false);
+  const voiceStealTimeoutRef = useRef<number | null>(null);
+  const [presets, setPresets] = useState<SynthPreset[]>([]);
+  const [currentPresetName, setCurrentPresetName] = useState<string>(DEFAULT_PRESET_NAME);
+  const [isPresetDirty, setIsPresetDirty] = useState<boolean>(false);
+  
+  // Performance and Modulation States
   const [modulatedParamIds, setModulatedParamIds] = useState<Set<string>>(new Set());
-
   const [masterVolumeTrimDb, setMasterVolumeTrimDb] = useState<number>(0);
   const [currentSampleRate, setCurrentSampleRate] = useState<number>(0);
   const [isMasterLimiterEnabled, setIsMasterLimiterEnabled] = useState<boolean>(true);
   const [limiterThresholdDb, setLimiterThresholdDb] = useState<number>(-6);
-
-  // Refs for MIDI CC throttling
   const throttledParamUpdatesRef = useRef<Record<string, { value: number; sourceDeviceId?: string }>>({});
   const throttleTimeoutRef = useRef<number | null>(null);
 
+  // Show a non-blocking notification
+  const showNotification = useCallback((message: string, type: 'success' | 'error' = 'success', duration = 3000) => {
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
+    }
+    setNotification({ message, type });
+    notificationTimeoutRef.current = window.setTimeout(() => {
+      setNotification(null);
+    }, duration);
+  }, []);
 
   useEffect(() => {
     const savedAssignments = localStorage.getItem(LOCAL_STORAGE_MIDI_ASSIGNMENTS_KEY);
     if (savedAssignments) {
-      setMidiDeviceAssignments(JSON.parse(savedAssignments));
+      try {
+        setMidiDeviceAssignments(JSON.parse(savedAssignments));
+      } catch (e) {
+        console.error("Failed to parse MIDI assignments from localStorage", e);
+      }
     }
   }, []);
   
@@ -215,7 +215,6 @@ const App: React.FC = () => {
     );
     setIsMidiSystemReady(isMidiSystemInitialized && hasAssignedDevice);
   }, [isMidiSystemInitialized, midiDeviceAssignments]);
-
 
   const handleSetHelpText = useCallback((text: string) => { setCurrentHelpText(text); }, []);
   const handleClearHelpText = useCallback(() => { setCurrentHelpText(DEFAULT_HELP_TEXT); }, []);
@@ -313,27 +312,31 @@ const App: React.FC = () => {
   const applySidebarLayout = useCallback((layoutKey: string) => { const layout = PREDEFINED_SIDEBAR_LAYOUTS[layoutKey]; if (layout) { const effectsToActivate = layout.effects.filter(id => id !== 'masterMixer'); setActiveEffectsInSidebar(new Set(effectsToActivate)); } }, []);
   const handleVoiceCountChange = useCallback((count: number) => { setActiveVoiceCount(count); }, []);
   const handleVoiceSteal = useCallback(() => { setVoiceStealIndicatorActive(true); if (voiceStealTimeoutRef.current) clearTimeout(voiceStealTimeoutRef.current); voiceStealTimeoutRef.current = window.setTimeout(() => setVoiceStealIndicatorActive(false), 500); }, []);
-  const handleOscParamsChange = useCallback((newParams: OscillatorParams) => { setOscParams(newParams); audioEngine?.updateOscillatorParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
+  const handleOscParamsChange = useCallback((newParams: OscillatorParams | ((prev: OscillatorParams) => OscillatorParams)) => { setOscParams(newParams); audioEngine?.updateOscillatorParams(typeof newParams === 'function' ? newParams(oscParams) : newParams); setIsPresetDirty(true); }, [audioEngine, oscParams]);
 
   const initAudio = useCallback(async () => {
     if (isAudioInitialized) return;
-    const engine = new AudioEngine(oscParams, filterParams, lfoParams, envParams, delayParams, reverbParams, ringModParams, waveshaperParams, stereoWidthParams, noiseParams, masterMixerParams, overdriveParams, lowPassFilterInsertParams, highPassFilterInsertParams, bandPassFilterInsertParams, notchFilterInsertParams, compressorParams, threeBandEqParams, ladderFilterParams, modMatrixParams, userMaxPolyphony, handleVoiceCountChange, handleVoiceSteal, globalBpm, userWavetables);
-    const success = await engine.init();
-    if (success) {
-      setAudioEngine(engine); setIsAudioInitialized(true);
-      const fetchedAnalysers = engine.getAnalysers();
-      setAppAnalysers({ masterPreLimiterAnalyser: fetchedAnalysers.masterPreLimiterAnalyser, masterPostLimiterAnalyser: fetchedAnalysers.masterPostLimiterAnalyser, preInsertChainAnalyser: fetchedAnalysers.preInsertChainAnalyser, delaySendInputAnalyser: fetchedAnalysers.delaySendInputAnalyser, reverbSendInputAnalyser: fetchedAnalysers.reverbSendInputAnalyser });
-      setCurrentSampleRate(engine.getSampleRate());
-      engine.setMasterVolumeTrimDb(masterVolumeTrimDb); engine.setMasterLimiterEnabled(isMasterLimiterEnabled); engine.setMasterLimiterThreshold(limiterThresholdDb);
-      const newInsertAnalysers = new Map<InsertEffectId, AnalyserNode | null>();
-      INSERT_EFFECT_DEFINITIONS.forEach(def => { const effectId = def.id as InsertEffectId; if (engine.isInsertEffect(effectId)) newInsertAnalysers.set(effectId, engine.getInsertEffectAnalyser(effectId)); });
-      setInsertEffectAnalysers(newInsertAnalysers);
-    } else { alert('Failed to initialize Web Audio API. Please use a modern browser.'); }
-  }, [isAudioInitialized, oscParams, filterParams, lfoParams, envParams, delayParams, reverbParams, ringModParams, waveshaperParams, stereoWidthParams, noiseParams, masterMixerParams, overdriveParams, lowPassFilterInsertParams, highPassFilterInsertParams, bandPassFilterInsertParams, notchFilterInsertParams, compressorParams, threeBandEqParams, ladderFilterParams, modMatrixParams, userMaxPolyphony, globalBpm, handleVoiceCountChange, handleVoiceSteal, masterVolumeTrimDb, isMasterLimiterEnabled, limiterThresholdDb, userWavetables]);
+    try {
+      const engine = new AudioEngine(oscParams, filterParams, lfoParams, envParams, delayParams, reverbParams, ringModParams, waveshaperParams, stereoWidthParams, noiseParams, masterMixerParams, overdriveParams, lowPassFilterInsertParams, highPassFilterInsertParams, bandPassFilterInsertParams, notchFilterInsertParams, compressorParams, threeBandEqParams, ladderFilterParams, modMatrixParams, userMaxPolyphony, handleVoiceCountChange, handleVoiceSteal, globalBpm, userWavetables);
+      const success = await engine.init();
+      if (success) {
+        setAudioEngine(engine); setIsAudioInitialized(true);
+        const fetchedAnalysers = engine.getAnalysers();
+        setAppAnalysers({ masterPreLimiterAnalyser: fetchedAnalysers.masterPreLimiterAnalyser, masterPostLimiterAnalyser: fetchedAnalysers.masterPostLimiterAnalyser, preInsertChainAnalyser: fetchedAnalysers.preInsertChainAnalyser, delaySendInputAnalyser: fetchedAnalysers.delaySendInputAnalyser, reverbSendInputAnalyser: fetchedAnalysers.reverbSendInputAnalyser });
+        setCurrentSampleRate(engine.getSampleRate());
+        engine.setMasterVolumeTrimDb(masterVolumeTrimDb); engine.setMasterLimiterEnabled(isMasterLimiterEnabled); engine.setMasterLimiterThreshold(limiterThresholdDb);
+        const newInsertAnalysers = new Map<InsertEffectId, AnalyserNode | null>();
+        INSERT_EFFECT_DEFINITIONS.forEach(def => { const effectId = def.id as InsertEffectId; if (engine.isInsertEffect(effectId)) newInsertAnalysers.set(effectId, engine.getInsertEffectAnalyser(effectId)); });
+        setInsertEffectAnalysers(newInsertAnalysers);
+      } else { showNotification('Failed to initialize Web Audio API. Please use a modern browser.', 'error'); }
+    } catch(e) {
+      showNotification(`Audio engine failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  }, [isAudioInitialized, oscParams, filterParams, lfoParams, envParams, delayParams, reverbParams, ringModParams, waveshaperParams, stereoWidthParams, noiseParams, masterMixerParams, overdriveParams, lowPassFilterInsertParams, highPassFilterInsertParams, bandPassFilterInsertParams, notchFilterInsertParams, compressorParams, threeBandEqParams, ladderFilterParams, modMatrixParams, userMaxPolyphony, globalBpm, handleVoiceCountChange, handleVoiceSteal, masterVolumeTrimDb, isMasterLimiterEnabled, limiterThresholdDb, userWavetables, showNotification]);
 
   useEffect(() => { if (audioEngine) audioEngine.updateUserWavetables(userWavetables); }, [userWavetables, audioEngine]);
   const handleCustomWavLoad = useCallback(async (file: File, oscType: 'X' | 'Y') => {
-    if (!audioEngine || !audioEngine.isInitialized()) { alert("Audio engine not ready for loading wavetables."); return; }
+    if (!audioEngine || !audioEngine.isInitialized()) { showNotification("Audio engine not ready for loading wavetables.", 'error'); return; }
     const tempAudioContext = new AudioContext();
     try {
       const arrayBuffer = await file.arrayBuffer(); const decodedBuffer = await tempAudioContext.decodeAudioData(arrayBuffer); await tempAudioContext.close();
@@ -342,70 +345,141 @@ const App: React.FC = () => {
       const newUserWavetable: UserWavetable = { id: tableId, name: file.name, data: resampledSamples };
       setUserWavetables(prev => ({ ...prev, [tableId]: newUserWavetable })); setUserLoadedWavetableNames(prev => ({ ...prev, [oscType.toLowerCase()]: file.name }));
       setOscParams(prevOscParams => { const newOscParams = { ...prevOscParams, ...(oscType === 'X' ? { waveformX: Waveform.WAVETABLE, wavetableX: tableId } : {}), ...(oscType === 'Y' ? { waveformY: Waveform.WAVETABLE, wavetableY: tableId } : {}), }; audioEngine?.updateOscillatorParams(newOscParams); setIsPresetDirty(true); return newOscParams; });
-      alert(`Loaded and resampled "${file.name}" for Oscillator ${oscType}.`);
-    } catch (error) { console.error("Error loading or decoding custom WAV:", error); alert(`Failed to load custom WAV: ${error instanceof Error ? error.message : String(error)}`); if (tempAudioContext.state !== 'closed') await tempAudioContext.close(); }
-  }, [audioEngine]); 
+      showNotification(`Loaded and resampled "${file.name}" for Oscillator ${oscType}.`);
+    } catch (error) { console.error("Error loading or decoding custom WAV:", error); showNotification(`Failed to load custom WAV: ${error instanceof Error ? error.message : String(error)}`, 'error'); if (tempAudioContext.state !== 'closed') await tempAudioContext.close(); }
+  }, [audioEngine, showNotification]); 
   const dynamicWavetableOptions = useMemo<WavetableOption[]>(() => { const builtInOptions = WAVETABLE_OPTIONS.map(opt => ({ ...opt, isUser: false })); const userOptions: WavetableOption[] = Object.values(userWavetables).map(uw => ({ value: uw.id, label: `User: ${uw.name}`, isUser: true, })); return [...builtInOptions, ...userOptions]; }, [userWavetables]);
-  const handleFilterParamsChange = useCallback((newParams: FilterParams) => { setFilterParams(newParams); audioEngine?.updateFilterParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleLfoParamsChange = useCallback((newParams: LfoParams) => { setLfoParams(newParams); audioEngine?.updateLfoParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleEnvParamsChange = useCallback((newParams: EnvelopeParams) => { setEnvParams(newParams); audioEngine?.updateEnvelopeParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
+  const handleFilterParamsChange = useCallback((newParams: FilterParams | ((prev: FilterParams) => FilterParams)) => { setFilterParams(newParams); audioEngine?.updateFilterParams(typeof newParams === 'function' ? newParams(filterParams) : newParams); setIsPresetDirty(true); }, [audioEngine, filterParams]);
+  const handleLfoParamsChange = useCallback((newParams: LfoParams | ((prev: LfoParams) => LfoParams)) => { setLfoParams(newParams); audioEngine?.updateLfoParams(typeof newParams === 'function' ? newParams(lfoParams) : newParams); setIsPresetDirty(true); }, [audioEngine, lfoParams]);
+  const handleEnvParamsChange = useCallback((newParams: EnvelopeParams | ((prev: EnvelopeParams) => EnvelopeParams)) => { setEnvParams(newParams); audioEngine?.updateEnvelopeParams(typeof newParams === 'function' ? newParams(envParams) : newParams); setIsPresetDirty(true); }, [audioEngine, envParams]);
   const handleVisualsParamsChange = useCallback((newParams: VisualsParams) => { setVisualsParams(newParams); setIsPresetDirty(true);}, []);
-  const handleDelayParamsChange = useCallback((newParams: DelayParams) => { setDelayParams(newParams); audioEngine?.updateDelayParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleReverbParamsChange = useCallback((newParams: ReverbParams) => { setReverbParams(prev => ({...prev, ...newParams})); audioEngine?.updateReverbParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleRingModParamsChange = useCallback((newParams: RingModParams) => { setRingModParams(newParams); audioEngine?.updateRingModParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleWaveshaperParamsChange = useCallback((newParams: WaveshaperParams) => { setWaveshaperParams(newParams); audioEngine?.updateWaveshaperParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleStereoWidthParamsChange = useCallback((newParams: StereoWidthParams) => { setStereoWidthParams(newParams); audioEngine?.updateStereoWidthParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleNoiseParamsChange = useCallback((newParams: NoiseParams) => { setNoiseParams(newParams); audioEngine?.updateNoiseParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleOverdriveParamsChange = useCallback((newParams: OverdriveParams) => { setOverdriveParams(newParams); audioEngine?.updateOverdriveParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleLowPassFilterInsertParamsChange = useCallback((newParams: LowPassFilterInsertParams) => { setLowPassFilterInsertParams(newParams); audioEngine?.updateLowPassFilterInsertParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleHighPassFilterInsertParamsChange = useCallback((newParams: HighPassFilterInsertParams) => { setHighPassFilterInsertParams(newParams); audioEngine?.updateHighPassFilterInsertParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleBandPassFilterInsertParamsChange = useCallback((newParams: BandPassFilterInsertParams) => { setBandPassFilterInsertParams(newParams); audioEngine?.updateBandPassFilterInsertParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleNotchFilterInsertParamsChange = useCallback((newParams: NotchFilterInsertParams) => { setNotchFilterInsertParams(newParams); audioEngine?.updateNotchFilterInsertParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleCompressorParamsChange = useCallback((newParams: CompressorParams) => { setCompressorParams(newParams); audioEngine?.updateCompressorParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleThreeBandEqParamsChange = useCallback((newParams: ThreeBandEqParams) => { setThreeBandEqParams(newParams); audioEngine?.updateThreeBandEqParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleLadderFilterParamsChange = useCallback((newParams: LadderFilterParams) => { setLadderFilterParams(newParams); audioEngine?.updateLadderFilterParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
-  const handleModMatrixParamsChange = useCallback((newParams: ModMatrixParams) => { setModMatrixParams(newParams); audioEngine?.updateModMatrixParams(newParams, modWheelValue); setIsPresetDirty(true); }, [audioEngine, modWheelValue]);
+  const handleDelayParamsChange = useCallback((newParams: DelayParams | ((prev: DelayParams) => DelayParams)) => { setDelayParams(newParams); audioEngine?.updateDelayParams(typeof newParams === 'function' ? newParams(delayParams) : newParams); setIsPresetDirty(true); }, [audioEngine, delayParams]);
+  const handleReverbParamsChange = useCallback((newParams: ReverbParams | ((prev: ReverbParams) => ReverbParams)) => { setReverbParams(newParams); audioEngine?.updateReverbParams(typeof newParams === 'function' ? newParams(reverbParams) : newParams); setIsPresetDirty(true); }, [audioEngine, reverbParams]);
+  const handleRingModParamsChange = useCallback((newParams: RingModParams | ((prev: RingModParams) => RingModParams)) => { setRingModParams(newParams); audioEngine?.updateRingModParams(typeof newParams === 'function' ? newParams(ringModParams) : newParams); setIsPresetDirty(true); }, [audioEngine, ringModParams]);
+  const handleWaveshaperParamsChange = useCallback((newParams: WaveshaperParams | ((prev: WaveshaperParams) => WaveshaperParams)) => { setWaveshaperParams(newParams); audioEngine?.updateWaveshaperParams(typeof newParams === 'function' ? newParams(waveshaperParams) : newParams); setIsPresetDirty(true); }, [audioEngine, waveshaperParams]);
+  const handleStereoWidthParamsChange = useCallback((newParams: StereoWidthParams | ((prev: StereoWidthParams) => StereoWidthParams)) => { setStereoWidthParams(newParams); audioEngine?.updateStereoWidthParams(typeof newParams === 'function' ? newParams(stereoWidthParams) : newParams); setIsPresetDirty(true); }, [audioEngine, stereoWidthParams]);
+  const handleNoiseParamsChange = useCallback((newParams: NoiseParams | ((prev: NoiseParams) => NoiseParams)) => { setNoiseParams(newParams); audioEngine?.updateNoiseParams(typeof newParams === 'function' ? newParams(noiseParams) : newParams); setIsPresetDirty(true); }, [audioEngine, noiseParams]);
+  const handleOverdriveParamsChange = useCallback((newParams: OverdriveParams | ((prev: OverdriveParams) => OverdriveParams)) => { setOverdriveParams(newParams); audioEngine?.updateOverdriveParams(typeof newParams === 'function' ? newParams(overdriveParams) : newParams); setIsPresetDirty(true); }, [audioEngine, overdriveParams]);
+  const handleLowPassFilterInsertParamsChange = useCallback((newParams: LowPassFilterInsertParams | ((prev: LowPassFilterInsertParams) => LowPassFilterInsertParams)) => { setLowPassFilterInsertParams(newParams); audioEngine?.updateLowPassFilterInsertParams(typeof newParams === 'function' ? newParams(lowPassFilterInsertParams) : newParams); setIsPresetDirty(true); }, [audioEngine, lowPassFilterInsertParams]);
+  const handleHighPassFilterInsertParamsChange = useCallback((newParams: HighPassFilterInsertParams | ((prev: HighPassFilterInsertParams) => HighPassFilterInsertParams)) => { setHighPassFilterInsertParams(newParams); audioEngine?.updateHighPassFilterInsertParams(typeof newParams === 'function' ? newParams(highPassFilterInsertParams) : newParams); setIsPresetDirty(true); }, [audioEngine, highPassFilterInsertParams]);
+  const handleBandPassFilterInsertParamsChange = useCallback((newParams: BandPassFilterInsertParams | ((prev: BandPassFilterInsertParams) => BandPassFilterInsertParams)) => { setBandPassFilterInsertParams(newParams); audioEngine?.updateBandPassFilterInsertParams(typeof newParams === 'function' ? newParams(bandPassFilterInsertParams) : newParams); setIsPresetDirty(true); }, [audioEngine, bandPassFilterInsertParams]);
+  const handleNotchFilterInsertParamsChange = useCallback((newParams: NotchFilterInsertParams | ((prev: NotchFilterInsertParams) => NotchFilterInsertParams)) => { setNotchFilterInsertParams(newParams); audioEngine?.updateNotchFilterInsertParams(typeof newParams === 'function' ? newParams(notchFilterInsertParams) : newParams); setIsPresetDirty(true); }, [audioEngine, notchFilterInsertParams]);
+  const handleCompressorParamsChange = useCallback((newParams: CompressorParams | ((prev: CompressorParams) => CompressorParams)) => { setCompressorParams(newParams); audioEngine?.updateCompressorParams(typeof newParams === 'function' ? newParams(compressorParams) : newParams); setIsPresetDirty(true); }, [audioEngine, compressorParams]);
+  const handleThreeBandEqParamsChange = useCallback((newParams: ThreeBandEqParams | ((prev: ThreeBandEqParams) => ThreeBandEqParams)) => { setThreeBandEqParams(newParams); audioEngine?.updateThreeBandEqParams(typeof newParams === 'function' ? newParams(threeBandEqParams) : newParams); setIsPresetDirty(true); }, [audioEngine, threeBandEqParams]);
+  const handleLadderFilterParamsChange = useCallback((newParams: LadderFilterParams | ((prev: LadderFilterParams) => LadderFilterParams)) => { setLadderFilterParams(newParams); audioEngine?.updateLadderFilterParams(typeof newParams === 'function' ? newParams(ladderFilterParams) : newParams); setIsPresetDirty(true); }, [audioEngine, ladderFilterParams]);
+  const handleModMatrixParamsChange = useCallback((newParams: ModMatrixParams | ((prev: ModMatrixParams) => ModMatrixParams)) => { setModMatrixParams(newParams); audioEngine?.updateModMatrixParams(typeof newParams === 'function' ? newParams(modMatrixParams) : newParams, modWheelValue); setIsPresetDirty(true); }, [audioEngine, modWheelValue, modMatrixParams]);
   const handleUserMaxPolyphonyChange = useCallback((newLimit: number) => { const clampedLimit = Math.max(1, Math.min(MAX_POLYPHONY, newLimit)); setUserMaxPolyphony(clampedLimit); audioEngine?.setUserMaxPolyphony(clampedLimit); setIsPresetDirty(true); }, [audioEngine]);
   const handleGlobalBpmChange = useCallback((newBpm: number) => { const clampedBpm = Math.max(20, Math.min(300, newBpm)); setGlobalBpm(clampedBpm); audioEngine?.updateGlobalBpm(clampedBpm); setIsPresetDirty(true); }, [audioEngine]);
-  const handleMasterMixerParamsChange = useCallback((newParams: MasterMixerParams) => { setMasterMixerParams(newParams); audioEngine?.updateMasterMixerParams(newParams); setIsPresetDirty(true); }, [audioEngine]);
+  const handleMasterMixerParamsChange = useCallback((newParams: MasterMixerParams | ((prev: MasterMixerParams) => MasterMixerParams)) => { setMasterMixerParams(newParams); audioEngine?.updateMasterMixerParams(typeof newParams === 'function' ? newParams(masterMixerParams) : newParams); setIsPresetDirty(true); }, [audioEngine, masterMixerParams]);
   
-  const dispatchParameterUpdate = useCallback((paramId: string, value: number, sourceDeviceId?: string) => {
+  const dispatchParameterUpdate = useCallback((paramId: string, value: number) => {
     setIsPresetDirty(true);
     const [groupKey, fieldKey, indexStrOrSubKey, subFieldKeyIfPresent] = paramId.split('.');
     const boolValue = value > 0.5;
+    
     switch (groupKey) {
-      case 'osc': if (fieldKey === 'waveformX' || fieldKey === 'waveformY' || fieldKey === 'wavetableX' || fieldKey === 'wavetableY') {} else handleOscParamsChange({ ...oscParams, [fieldKey]: value }); break;
-      case 'filter': if (fieldKey === 'isFilterEnabled') handleFilterParamsChange({ ...filterParams, isFilterEnabled: boolValue }); else handleFilterParamsChange({ ...filterParams, [fieldKey]: value }); break;
-      case 'lfo': if (fieldKey === 'isTempoSynced') handleLfoParamsChange({...lfoParams, isTempoSynced: boolValue }); else if (fieldKey === 'waveform' || fieldKey === 'target' || fieldKey === 'tempoSyncDivision') {} else handleLfoParamsChange({ ...lfoParams, [fieldKey]: value }); break;
-      case 'env': if (fieldKey === 'isEnvelopeEnabled') handleEnvParamsChange({ ...envParams, isEnvelopeEnabled: boolValue }); else handleEnvParamsChange({ ...envParams, [fieldKey]: value }); break;
-      case 'delay': if (fieldKey === 'isDelayEnabled') handleDelayParamsChange({...delayParams, isDelayEnabled: boolValue}); else handleDelayParamsChange({...delayParams, [fieldKey]: value}); break;
-      case 'reverb': if (fieldKey === 'isReverbEnabled') handleReverbParamsChange({...reverbParams, isReverbEnabled: boolValue}); else handleReverbParamsChange({...reverbParams, [fieldKey]: value}); break;
-      case 'ringMod': if (fieldKey === 'isRingModEnabled') handleRingModParamsChange({...ringModParams, isRingModEnabled: boolValue}); else handleRingModParamsChange({...ringModParams, [fieldKey]: value}); break;
-      case 'waveshaper': if (fieldKey === 'isWaveshaperEnabled') handleWaveshaperParamsChange({...waveshaperParams, isWaveshaperEnabled: boolValue}); else handleWaveshaperParamsChange({...waveshaperParams, [fieldKey]: value}); break;
-      case 'stereoWidth': if (fieldKey === 'isStereoWidthEnabled') handleStereoWidthParamsChange({...stereoWidthParams, isStereoWidthEnabled: boolValue}); else handleStereoWidthParamsChange({...stereoWidthParams, [fieldKey]: value}); break;
-      case 'noise': if (fieldKey === 'isNoiseEnabled') handleNoiseParamsChange({...noiseParams, isNoiseEnabled: boolValue}); else handleNoiseParamsChange({...noiseParams, [fieldKey]: value}); break;
-      case 'overdrive': if (fieldKey === 'isOverdriveEnabled') handleOverdriveParamsChange({...overdriveParams, isOverdriveEnabled: boolValue}); else handleOverdriveParamsChange({...overdriveParams, [fieldKey]: value}); break;
-      case 'lowPassInsert': if (fieldKey === 'isLowPassInsertEnabled') handleLowPassFilterInsertParamsChange({...lowPassFilterInsertParams, isLowPassInsertEnabled: boolValue}); else handleLowPassFilterInsertParamsChange({...lowPassFilterInsertParams, [fieldKey]: value}); break;
-      case 'highPassInsert': if (fieldKey === 'isHighPassInsertEnabled') handleHighPassFilterInsertParamsChange({...highPassFilterInsertParams, isHighPassInsertEnabled: boolValue}); else handleHighPassFilterInsertParamsChange({...highPassFilterInsertParams, [fieldKey]: value}); break;
-      case 'bandPassInsert': if (fieldKey === 'isBandPassInsertEnabled') handleBandPassFilterInsertParamsChange({...bandPassFilterInsertParams, isBandPassInsertEnabled: boolValue}); else handleBandPassFilterInsertParamsChange({...bandPassFilterInsertParams, [fieldKey]: value}); break;
-      case 'notchInsert': if (fieldKey === 'isNotchInsertEnabled') handleNotchFilterInsertParamsChange({...notchFilterInsertParams, isNotchInsertEnabled: boolValue}); else handleNotchFilterInsertParamsChange({...notchFilterInsertParams, [fieldKey]: value}); break;
-      case 'compressor': if (fieldKey === 'isCompressorEnabled') handleCompressorParamsChange({...compressorParams, isCompressorEnabled: boolValue}); else handleCompressorParamsChange({...compressorParams, [fieldKey]: value}); break;
-      case 'ladderFilter': if (fieldKey === 'isLadderFilterEnabled') handleLadderFilterParamsChange({...ladderFilterParams, isLadderFilterEnabled: boolValue}); else handleLadderFilterParamsChange({...ladderFilterParams, [fieldKey]: value}); break;
-      case 'masterMixer': handleMasterMixerParamsChange({ ...masterMixerParams, [fieldKey]: value }); break;
-      case 'performance': if(fieldKey === 'userMaxPolyphony') handleUserMaxPolyphonyChange(value); break;
-      case 'global': if(fieldKey === 'bpm') handleGlobalBpmChange(value); break;
-      case 'modMatrix': if (fieldKey === 'slots' && indexStrOrSubKey && subFieldKeyIfPresent === 'amount') { const slotIndex = parseInt(indexStrOrSubKey, 10); const newSlots = [...modMatrixParams.slots]; newSlots[slotIndex] = { ...newSlots[slotIndex], amount: value }; handleModMatrixParamsChange({ ...modMatrixParams, slots: newSlots }); } else if (fieldKey === 'isEnabled') handleModMatrixParamsChange({...modMatrixParams, isEnabled: boolValue }); break;
-      case 'threeBandEq': if (fieldKey === 'isThreeBandEqEnabled') handleThreeBandEqParamsChange({...threeBandEqParams, isThreeBandEqEnabled: boolValue }); else if (fieldKey === 'outputLevel') handleThreeBandEqParamsChange({ ...threeBandEqParams, outputLevel: value }); else if (['lowShelf', 'midPeak', 'highShelf'].includes(fieldKey) && indexStrOrSubKey) { const bandKey = fieldKey as 'lowShelf' | 'midPeak' | 'highShelf'; const actualSubFieldKey = indexStrOrSubKey; const updatedBand = { ...threeBandEqParams[bandKey], [actualSubFieldKey]: value }; handleThreeBandEqParamsChange({ ...threeBandEqParams, [bandKey]: updatedBand }); } break;
-      default: console.warn(`MIDI Learn: Unknown paramId group: ${groupKey}`);
+        case 'osc':
+            if (!['waveformX', 'waveformY', 'wavetableX', 'wavetableY'].includes(fieldKey)) {
+                handleOscParamsChange(prev => ({ ...prev, [fieldKey]: value }));
+            }
+            break;
+        case 'filter':
+            handleFilterParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isFilterEnabled' ? boolValue : value }));
+            break;
+        case 'lfo':
+            if (!['waveform', 'target', 'tempoSyncDivision'].includes(fieldKey)) {
+                handleLfoParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isTempoSynced' ? boolValue : value }));
+            }
+            break;
+        case 'env':
+            handleEnvParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isEnvelopeEnabled' ? boolValue : value }));
+            break;
+        case 'delay':
+            handleDelayParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isDelayEnabled' ? boolValue : value }));
+            break;
+        case 'reverb':
+            handleReverbParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isReverbEnabled' ? boolValue : value }));
+            break;
+        case 'ringMod':
+            handleRingModParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isRingModEnabled' ? boolValue : value }));
+            break;
+        case 'waveshaper':
+            handleWaveshaperParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isWaveshaperEnabled' ? boolValue : value }));
+            break;
+        case 'stereoWidth':
+            handleStereoWidthParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isStereoWidthEnabled' ? boolValue : value }));
+            break;
+        case 'noise':
+            handleNoiseParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isNoiseEnabled' ? boolValue : value }));
+            break;
+        case 'overdrive':
+            handleOverdriveParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isOverdriveEnabled' ? boolValue : value }));
+            break;
+        case 'lowPassInsert':
+            handleLowPassFilterInsertParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isLowPassInsertEnabled' ? boolValue : value }));
+            break;
+        case 'highPassInsert':
+            handleHighPassFilterInsertParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isHighPassInsertEnabled' ? boolValue : value }));
+            break;
+        case 'bandPassInsert':
+            handleBandPassFilterInsertParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isBandPassInsertEnabled' ? boolValue : value }));
+            break;
+        case 'notchInsert':
+            handleNotchFilterInsertParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isNotchInsertEnabled' ? boolValue : value }));
+            break;
+        case 'compressor':
+            handleCompressorParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isCompressorEnabled' ? boolValue : value }));
+            break;
+        case 'ladderFilter':
+            handleLadderFilterParamsChange(prev => ({ ...prev, [fieldKey]: fieldKey === 'isLadderFilterEnabled' ? boolValue : value }));
+            break;
+        case 'masterMixer':
+            handleMasterMixerParamsChange(prev => ({ ...prev, [fieldKey]: value }));
+            break;
+        case 'performance':
+            if (fieldKey === 'userMaxPolyphony') handleUserMaxPolyphonyChange(value);
+            break;
+        case 'global':
+            if (fieldKey === 'bpm') handleGlobalBpmChange(value);
+            break;
+        case 'modMatrix':
+            handleModMatrixParamsChange(prev => {
+                if (fieldKey === 'slots' && indexStrOrSubKey && subFieldKeyIfPresent === 'amount') {
+                    const slotIndex = parseInt(indexStrOrSubKey, 10);
+                    const newSlots = [...prev.slots];
+                    newSlots[slotIndex] = { ...newSlots[slotIndex], amount: value };
+                    return { ...prev, slots: newSlots };
+                }
+                if (fieldKey === 'isEnabled') {
+                    return { ...prev, isEnabled: boolValue };
+                }
+                return prev;
+            });
+            break;
+        case 'threeBandEq':
+            handleThreeBandEqParamsChange(prev => {
+                if (fieldKey === 'isThreeBandEqEnabled') return { ...prev, isThreeBandEqEnabled: boolValue };
+                if (fieldKey === 'outputLevel') return { ...prev, outputLevel: value };
+                if (['lowShelf', 'midPeak', 'highShelf'].includes(fieldKey) && indexStrOrSubKey) {
+                    const bandKey = fieldKey as 'lowShelf' | 'midPeak' | 'highShelf';
+                    const actualSubFieldKey = indexStrOrSubKey;
+                    const updatedBand = { ...prev[bandKey], [actualSubFieldKey]: value };
+                    return { ...prev, [bandKey]: updatedBand };
+                }
+                return prev;
+            });
+            break;
+        default:
+            console.warn(`MIDI Learn: Unknown paramId group: ${groupKey}`);
     }
-  }, [oscParams, filterParams, lfoParams, envParams, delayParams, reverbParams, ringModParams, waveshaperParams, stereoWidthParams, noiseParams, masterMixerParams, overdriveParams, lowPassFilterInsertParams, highPassFilterInsertParams, bandPassFilterInsertParams, notchFilterInsertParams, compressorParams, threeBandEqParams, ladderFilterParams, modMatrixParams, handleOscParamsChange, handleFilterParamsChange, handleLfoParamsChange, handleEnvParamsChange, handleDelayParamsChange, handleReverbParamsChange, handleRingModParamsChange, handleWaveshaperParamsChange, handleStereoWidthParamsChange, handleNoiseParamsChange, handleOverdriveParamsChange, handleLowPassFilterInsertParamsChange, handleHighPassFilterInsertParamsChange, handleBandPassFilterInsertParamsChange, handleNotchFilterInsertParamsChange, handleCompressorParamsChange, handleLadderFilterParamsChange, handleMasterMixerParamsChange, handleUserMaxPolyphonyChange, handleGlobalBpmChange, handleModMatrixParamsChange, handleThreeBandEqParamsChange ]);
+  }, [handleOscParamsChange, handleFilterParamsChange, handleLfoParamsChange, handleEnvParamsChange, handleDelayParamsChange, handleReverbParamsChange, handleRingModParamsChange, handleWaveshaperParamsChange, handleStereoWidthParamsChange, handleNoiseParamsChange, handleMasterMixerParamsChange, handleOverdriveParamsChange, handleLowPassFilterInsertParamsChange, handleHighPassFilterInsertParamsChange, handleBandPassFilterInsertParamsChange, handleNotchFilterInsertParamsChange, handleCompressorParamsChange, handleLadderFilterParamsChange, handleUserMaxPolyphonyChange, handleGlobalBpmChange, handleModMatrixParamsChange, handleThreeBandEqParamsChange ]);
   
   useEffect(() => { const savedPresets = localStorage.getItem(LOCAL_STORAGE_PRESET_KEY); if (savedPresets) setPresets(JSON.parse(savedPresets)); }, []);
   const saveCurrentPreset = useCallback((name: string) => {
-    if (!name.trim()) { alert("Preset name cannot be empty."); return; }
+    if (!name.trim()) { showNotification("Preset name cannot be empty.", "error"); return; }
     const newPreset: SynthPreset = { name: name.trim(), oscParams, filterParams, lfoParams, envParams, visualsParams, delayParams, reverbParams: { ...reverbParams, customIrBuffer: undefined }, ringModParams, waveshaperParams, stereoWidthParams, noiseParams, masterMixerParams, overdriveParams, lowPassFilterInsertParams, highPassFilterInsertParams, bandPassFilterInsertParams, notchFilterInsertParams, compressorParams, threeBandEqParams, ladderFilterParams, modMatrixParams, userMaxPolyphony, midiMappings, globalBpm, midiDeviceAssignments };
-    setPresets(prev => { const existingIndex = prev.findIndex(p => p.name === newPreset.name); let updatedPresets; if (existingIndex > -1) { if (!window.confirm(`A preset named "${newPreset.name}" already exists. Overwrite?`)) return prev; updatedPresets = [...prev]; updatedPresets[existingIndex] = newPreset; } else updatedPresets = [...prev, newPreset]; localStorage.setItem(LOCAL_STORAGE_PRESET_KEY, JSON.stringify(updatedPresets)); setCurrentPresetName(newPreset.name); setIsPresetDirty(false); alert(`Preset "${newPreset.name}" saved!`); return updatedPresets; });
-  }, [oscParams, filterParams, lfoParams, envParams, visualsParams, delayParams, reverbParams, ringModParams, waveshaperParams, stereoWidthParams, noiseParams, masterMixerParams, overdriveParams, lowPassFilterInsertParams, highPassFilterInsertParams, bandPassFilterInsertParams, notchFilterInsertParams, compressorParams, threeBandEqParams, ladderFilterParams, modMatrixParams, userMaxPolyphony, midiMappings, globalBpm, midiDeviceAssignments]);
+    setPresets(prev => { const existingIndex = prev.findIndex(p => p.name === newPreset.name); let updatedPresets; if (existingIndex > -1) { if (!window.confirm(`A preset named "${newPreset.name}" already exists. Overwrite?`)) return prev; updatedPresets = [...prev]; updatedPresets[existingIndex] = newPreset; } else updatedPresets = [...prev, newPreset]; localStorage.setItem(LOCAL_STORAGE_PRESET_KEY, JSON.stringify(updatedPresets)); setCurrentPresetName(newPreset.name); setIsPresetDirty(false); showNotification(`Preset "${newPreset.name}" saved!`); return updatedPresets; });
+  }, [oscParams, filterParams, lfoParams, envParams, visualsParams, delayParams, reverbParams, ringModParams, waveshaperParams, stereoWidthParams, noiseParams, masterMixerParams, overdriveParams, lowPassFilterInsertParams, highPassFilterInsertParams, bandPassFilterInsertParams, notchFilterInsertParams, compressorParams, threeBandEqParams, ladderFilterParams, modMatrixParams, userMaxPolyphony, midiMappings, globalBpm, midiDeviceAssignments, showNotification]);
   const loadPreset = useCallback((preset: SynthPreset) => {
     handleOscParamsChange(preset.oscParams); handleFilterParamsChange(preset.filterParams); handleLfoParamsChange(preset.lfoParams); handleEnvParamsChange(preset.envParams); handleVisualsParamsChange(preset.visualsParams); handleDelayParamsChange(preset.delayParams);
     const reverbToLoad: ReverbParams = { ...preset.reverbParams, customIrBuffer: preset.reverbParams.irUrl === 'custom_loaded_ir' && reverbParams.customIrBuffer ? reverbParams.customIrBuffer : null, };
@@ -431,7 +505,7 @@ const App: React.FC = () => {
 
   const processThrottledUpdates = useCallback(() => {
     Object.entries(throttledParamUpdatesRef.current).forEach(([paramId, data]) => {
-        dispatchParameterUpdate(paramId, data.value, data.sourceDeviceId);
+        dispatchParameterUpdate(paramId, data.value);
     });
     throttledParamUpdatesRef.current = {};
     if (throttleTimeoutRef.current) {
@@ -456,14 +530,36 @@ const App: React.FC = () => {
     const deviceRole = midiDeviceAssignments[sourceDeviceId] || MidiDeviceRole.UNASSIGNED;
 
     if (midiLearnActive && paramIdToLearn && paramMinMaxToLearn && (command & 0xF0) === 0xB0) {
-        if (deviceRole === MidiDeviceRole.CONTROL_SURFACE || (deviceRole === MidiDeviceRole.KEYBOARD && !Object.values(midiDeviceAssignments).includes(MidiDeviceRole.CONTROL_SURFACE)) ) {
-            const ccNumber = ccOrNote;
-            const newMapping: MidiMappingEntry = { cc: ccNumber, paramId: paramIdToLearn, min: paramMinMaxToLearn.min, max: paramMinMaxToLearn.max, sourceDeviceId };
-            setMidiMappings(prev => ({ ...prev, [ccNumber]: newMapping })); setIsPresetDirty(true);
-            alert(`MIDI CC ${ccNumber} on "${activeMidiInputsRef.current.get(sourceDeviceId)?.name || 'Unknown Device'}" learned for parameter ${paramIdToLearn}!`);
-            setMidiLearnActive(false); setParamIdToLearn(null); setParamMinMaxToLearn(null); setShowMidiLearnBanner(false); setMidiLearnTargetDeviceName(null);
-            return;
-        }
+      if (deviceRole === MidiDeviceRole.CONTROL_SURFACE || (deviceRole === MidiDeviceRole.KEYBOARD && !Object.values(midiDeviceAssignments).includes(MidiDeviceRole.CONTROL_SURFACE)) ) {
+          
+          const ccNumber = ccOrNote;
+          const newMapping: MidiMappingEntry = {
+              cc: ccNumber,
+              paramId: paramIdToLearn,
+              min: paramMinMaxToLearn.min,
+              max: paramMinMaxToLearn.max,
+              sourceDeviceId,
+          };
+  
+          setMidiMappings((prev) => ({ ...prev, [ccNumber]: newMapping }));
+          setIsPresetDirty(true);
+  
+          // Turn off learn mode immediately
+          setMidiLearnActive(false);
+          setParamIdToLearn(null);
+          setParamMinMaxToLearn(null);
+          setShowMidiLearnBanner(false);
+          setMidiLearnTargetDeviceName(null);
+  
+          // Show non-blocking notification instead of alert
+          showNotification(
+              `MIDI CC ${ccNumber} on "${
+                  activeMidiInputsRef.current.get(sourceDeviceId)?.name || 'Unknown Device'
+              }" learned for parameter ${paramIdToLearn}!`
+          );
+  
+          return; // Exit after handling the learned event
+      }
     }
 
     if (deviceRole === MidiDeviceRole.KEYBOARD) {
@@ -477,6 +573,7 @@ const App: React.FC = () => {
         const keyString = `midi_${ccOrNote}`;
         audioEngine.stopNote(keyString); setActiveKeys(prev => { const newSet = new Set(prev); newSet.delete(keyString); return newSet; });
       } else if ((command & 0xF0) === 0xE0) { 
+        // Pitch bend logic can go here
       } else if ((command & 0xF0) === 0xB0 && ccOrNote === 1) { 
         const newModWheelValue = rawValue / 127.0;
         setModWheelValue(newModWheelValue); audioEngine.updateGlobalModWheelValue(newModWheelValue);
@@ -500,7 +597,7 @@ const App: React.FC = () => {
         }
       }
     }
-  }, [audioEngine, midiLearnActive, paramIdToLearn, paramMinMaxToLearn, midiMappings, dispatchParameterUpdate, modWheelValue, midiDeviceAssignments, processThrottledUpdates]);
+  }, [audioEngine, midiLearnActive, paramIdToLearn, paramMinMaxToLearn, midiMappings, dispatchParameterUpdate, modWheelValue, midiDeviceAssignments, processThrottledUpdates, showNotification]);
 
   const refreshMidiDeviceList = useCallback(async (requestNewAccess = false) => {
     if (requestNewAccess && midiAccessRef.current) {
@@ -510,7 +607,7 @@ const App: React.FC = () => {
     }
 
     if (!navigator.requestMIDIAccess) {
-      alert("Web MIDI API not supported in this browser.");
+      showNotification("Web MIDI API not supported in this browser.", "error");
       setIsMidiSystemInitialized(false);
       return;
     }
@@ -522,7 +619,7 @@ const App: React.FC = () => {
       const midi = midiAccessRef.current;
       const inputs: DetectedMidiDevice[] = [];
       midi.inputs.forEach(input => {
-        inputs.push({ id: input.id, name: input.name || 'Unknown MIDI Device', manufacturer: input.manufacturer });
+        inputs.push({ id: input.id, name: input.name || 'Unknown MIDI Device', manufacturer: input.manufacturer || 'Unknown' });
         
         if (!activeMidiInputsRef.current.has(input.id) || requestNewAccess) {
             input.onmidimessage = (event) => handleMidiMessage(event, input.id);
@@ -533,17 +630,16 @@ const App: React.FC = () => {
       if (!isMidiSystemInitialized && inputs.length > 0) setIsMidiSystemInitialized(true);
       else if (inputs.length === 0) setIsMidiSystemInitialized(false); 
 
-      midi.onstatechange = (event: Event) => {
-        const midiEvent = event as MIDIConnectionEvent; 
+      midi.onstatechange = () => {
         refreshMidiDeviceList(); 
       };
 
     } catch (error) {
       console.error("Failed to get MIDI access or process devices:", error);
-      alert(`Failed to access MIDI devices: ${error instanceof Error ? error.message : String(error)}`);
+      showNotification(`Failed to access MIDI devices: ${error instanceof Error ? error.message : String(error)}`, 'error');
       setIsMidiSystemInitialized(false);
     }
-  }, [handleMidiMessage, isMidiSystemInitialized]);
+  }, [handleMidiMessage, isMidiSystemInitialized, showNotification]);
 
 
   useEffect(() => {
@@ -562,7 +658,7 @@ const App: React.FC = () => {
   }, []);
   
   const handleRequestMidiLearn = useCallback((paramId: string, min: number, max: number) => {
-    if (!isMidiSystemReady) { alert("Configure and enable a MIDI Control Surface or Keyboard in Settings to use MIDI Learn."); return; }
+    if (!isMidiSystemReady) { showNotification("Configure and enable a MIDI Control Surface or Keyboard in Settings to use MIDI Learn.", 'error'); return; }
     setParamIdToLearn(paramId); setParamMinMaxToLearn({ min, max }); setMidiLearnActive(true); 
     setShowMidiLearnBanner(false); // Specific learn, so global banner off
     
@@ -572,14 +668,14 @@ const App: React.FC = () => {
     if (keyboardDevice) { setMidiLearnTargetDeviceName(keyboardDevice.name); return; }
     setMidiLearnTargetDeviceName("any assigned device");
 
-  }, [isMidiSystemReady, detectedMidiInputs, midiDeviceAssignments]);
+  }, [isMidiSystemReady, detectedMidiInputs, midiDeviceAssignments, showNotification]);
 
   const toggleMidiLearnMode = useCallback(() => {
     if (midiLearnActive) { // Turning OFF
       setMidiLearnActive(false); setParamIdToLearn(null); setParamMinMaxToLearn(null); 
       setShowMidiLearnBanner(false); setMidiLearnTargetDeviceName(null);
     } else { // Turning ON (Global)
-      if (!isMidiSystemReady) { alert("Configure and enable a MIDI Control Surface or Keyboard in Settings to use MIDI Learn."); return; }
+      if (!isMidiSystemReady) { showNotification("Configure and enable a MIDI Control Surface or Keyboard in Settings to use MIDI Learn.", "error"); return; }
       setMidiLearnActive(true); setShowMidiLearnBanner(true); // Show global banner
       setParamIdToLearn(null); // Ensure no specific param is being learned
       
@@ -589,7 +685,7 @@ const App: React.FC = () => {
       else if (keyboardDevice) setMidiLearnTargetDeviceName(keyboardDevice.name);
       else setMidiLearnTargetDeviceName("any assigned device");
     }
-  }, [midiLearnActive, isMidiSystemReady, detectedMidiInputs, midiDeviceAssignments]);
+  }, [midiLearnActive, isMidiSystemReady, detectedMidiInputs, midiDeviceAssignments, showNotification]);
 
   useEffect(() => { if (midiLearnActive && !paramIdToLearn) setShowMidiLearnBanner(true); else if (!midiLearnActive) setShowMidiLearnBanner(false); }, [midiLearnActive, paramIdToLearn]);
   useEffect(() => {
@@ -615,8 +711,6 @@ const App: React.FC = () => {
   const toggleSidebars = () => setAreSidebarsVisible(!areSidebarsVisible);
   const componentMap: Record<string, React.FC<any>> = { oscillators: OscillatorControls, 'filter-lfo': FilterLfoControls, envelope: EnvelopeControls, visuals: VisualsControls, delay: DelayControls, reverb: ReverbControls, ringmod: RingModControls, waveshaper: WaveshaperControls, stereowidth: StereoWidthControls, noise: NoiseControls, overdrive: OverdriveControls, lowpassInsert: LowPassFilterInsertControls, highpassInsert: HighPassFilterInsertControls, bandpassInsert: BandPassFilterInsertControls, notchInsert: NotchFilterInsertControls, compressor: CompressorControls, threeBandEq: ThreeBandEqControls, ladderFilter: LadderFilterControls, modMatrix: ModulationMatrixControls, presets: PresetControls, performance: PerformanceControls, globalBpm: GlobalBpmControls, midiMappings: MidiMappingControls };
   
-  // The main content area no longer needs dynamic margins for the canvas.
-  // It just needs padding for the top bar.
   const mainContentClass = `flex-grow`;
   
   const currentHandlers = useMemo(() => ({ 
@@ -669,6 +763,18 @@ const App: React.FC = () => {
           <p className="mt-8 text-sm text-gray-400">Please use headphones for the best experience.</p>
         </div>
       )}
+      
+      {/* --- Notification Banner --- */}
+      {notification && (
+        <div 
+          className={`fixed top-16 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-lg shadow-2xl transition-all duration-300 ${
+            notification.type === 'success' ? 'bg-green-600 border border-green-500' : 'bg-red-600 border border-red-500'
+          } text-white font-semibold`}
+        >
+          {notification.message}
+        </div>
+      )}
+
       {isAudioInitialized && (
         <>
           <TopBar
@@ -705,7 +811,6 @@ const App: React.FC = () => {
                 analyserY={audioEngine?.getAnalysers().analyserY || null}
                 visualsParams={visualsParams}
                 isAudioActive={isOscilloscopeDrawingActive}
-                // No longer passing sidebar width props
               />
             </main>
             {areSidebarsVisible && (
