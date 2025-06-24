@@ -1,14 +1,13 @@
 {
-  "name": "midi-fixed-oscilattor-update-synth-6/20",
+  "name": "midi-fixed-oscilattor-update-synth-6-20",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
     "tauri": "tauri"
-    
   },
   "dependencies": {
     "react": "^19.1.0",
