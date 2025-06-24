@@ -65,7 +65,7 @@ interface AppAnalysersState {
 
 const HELP_BOX_HEIGHT_REM = 2.5; 
 const DEFAULT_HELP_TEXT = "Hover over a control to see its description.";
-const THROTTLE_DELAY_MS = 33; // For MIDI CC updates, approx 30 FPS
+const THROTTLE_DELAY_MS = 16; // Approx 60 FPS for smoother updates
 
 
 const resampleLinear = (originalSamples: Float32Array, targetLength: number): Float32Array => {
@@ -312,7 +312,18 @@ const App: React.FC = () => {
   const applySidebarLayout = useCallback((layoutKey: string) => { const layout = PREDEFINED_SIDEBAR_LAYOUTS[layoutKey]; if (layout) { const effectsToActivate = layout.effects.filter(id => id !== 'masterMixer'); setActiveEffectsInSidebar(new Set(effectsToActivate)); } }, []);
   const handleVoiceCountChange = useCallback((count: number) => { setActiveVoiceCount(count); }, []);
   const handleVoiceSteal = useCallback(() => { setVoiceStealIndicatorActive(true); if (voiceStealTimeoutRef.current) clearTimeout(voiceStealTimeoutRef.current); voiceStealTimeoutRef.current = window.setTimeout(() => setVoiceStealIndicatorActive(false), 500); }, []);
-  const handleOscParamsChange = useCallback((newParams: OscillatorParams | ((prev: OscillatorParams) => OscillatorParams)) => { setOscParams(newParams); audioEngine?.updateOscillatorParams(typeof newParams === 'function' ? newParams(oscParams) : newParams); setIsPresetDirty(true); }, [audioEngine, oscParams]);
+  
+  // UNISON BUG FIX: This handler now ONLY sets state.
+  const handleOscParamsChange = useCallback((newParams: OscillatorParams | ((prev: OscillatorParams) => OscillatorParams)) => {
+    setOscParams(newParams);
+    setIsPresetDirty(true);
+  }, []);
+
+  // UNISON BUG FIX: This useEffect pushes the confirmed state to the audio engine.
+  useEffect(() => {
+    audioEngine?.updateOscillatorParams(oscParams);
+  }, [oscParams, audioEngine]);
+
 
   const initAudio = useCallback(async () => {
     if (isAudioInitialized) return;
@@ -344,10 +355,10 @@ const App: React.FC = () => {
       const tableId = `user_osc${oscType}_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
       const newUserWavetable: UserWavetable = { id: tableId, name: file.name, data: resampledSamples };
       setUserWavetables(prev => ({ ...prev, [tableId]: newUserWavetable })); setUserLoadedWavetableNames(prev => ({ ...prev, [oscType.toLowerCase()]: file.name }));
-      setOscParams(prevOscParams => { const newOscParams = { ...prevOscParams, ...(oscType === 'X' ? { waveformX: Waveform.WAVETABLE, wavetableX: tableId } : {}), ...(oscType === 'Y' ? { waveformY: Waveform.WAVETABLE, wavetableY: tableId } : {}), }; audioEngine?.updateOscillatorParams(newOscParams); setIsPresetDirty(true); return newOscParams; });
+      handleOscParamsChange(prevOscParams => { const newOscParams = { ...prevOscParams, ...(oscType === 'X' ? { waveformX: Waveform.WAVETABLE, wavetableX: tableId } : {}), ...(oscType === 'Y' ? { waveformY: Waveform.WAVETABLE, wavetableY: tableId } : {}), }; return newOscParams; });
       showNotification(`Loaded and resampled "${file.name}" for Oscillator ${oscType}.`);
     } catch (error) { console.error("Error loading or decoding custom WAV:", error); showNotification(`Failed to load custom WAV: ${error instanceof Error ? error.message : String(error)}`, 'error'); if (tempAudioContext.state !== 'closed') await tempAudioContext.close(); }
-  }, [audioEngine, showNotification]); 
+  }, [audioEngine, showNotification, handleOscParamsChange]); 
   const dynamicWavetableOptions = useMemo<WavetableOption[]>(() => { const builtInOptions = WAVETABLE_OPTIONS.map(opt => ({ ...opt, isUser: false })); const userOptions: WavetableOption[] = Object.values(userWavetables).map(uw => ({ value: uw.id, label: `User: ${uw.name}`, isUser: true, })); return [...builtInOptions, ...userOptions]; }, [userWavetables]);
   const handleFilterParamsChange = useCallback((newParams: FilterParams | ((prev: FilterParams) => FilterParams)) => { setFilterParams(newParams); audioEngine?.updateFilterParams(typeof newParams === 'function' ? newParams(filterParams) : newParams); setIsPresetDirty(true); }, [audioEngine, filterParams]);
   const handleLfoParamsChange = useCallback((newParams: LfoParams | ((prev: LfoParams) => LfoParams)) => { setLfoParams(newParams); audioEngine?.updateLfoParams(typeof newParams === 'function' ? newParams(lfoParams) : newParams); setIsPresetDirty(true); }, [audioEngine, lfoParams]);

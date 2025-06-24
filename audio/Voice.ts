@@ -1,5 +1,4 @@
-
-import { Waveform, OscillatorParams, FilterParams, EnvelopeParams, NoiseParams, LfoParams, FilterNodeType, LfoTarget, ModMatrixParams, ModSource, ModDestination, UserWavetable, ModMatrixSlot } from '../types';
+import { Waveform, OscillatorParams, FilterParams, EnvelopeParams, NoiseParams, LfoParams, FilterNodeType, LfoTarget, ModMatrixParams, ModSource, ModDestination, UserWavetable, ModMatrixSlot, AllInstrumentParams } from '../types';
 import { PeriodicWaveStore, PeriodicWaveUtils } from './PeriodicWaves';
 import { RAMP_TIME, MAX_PHASE_DELAY_TIME, C4_FREQ, WAVETABLE_DEFINITIONS, NUM_MOD_SLOTS, DEFAULT_TABLE_SIZE, MIN_ENV_TIME, DEFAULT_LFO_PARAMS, DEFAULT_MOD_MATRIX_PARAMS } from '../constants';
 import { WaveformUtils } from './WaveformUtils';
@@ -10,9 +9,9 @@ const MOD_DESTINATION_SCALING_FILTER_HZ = 5000;
 const MOD_DESTINATION_SCALING_PHASE_S = 0.01;    
 const MOD_DESTINATION_SCALING_VCA_GAIN = 1.0;    
 const MOD_DESTINATION_SCALING_LFO_RATE_HZ = 20;  
-const MOD_DESTINATION_SCALING_LFO_DEPTH = 1.0;   
+const MOD_DESTINATION_SCALING_LFO_DEPTH = 1.0;  
 const MOD_DESTINATION_SCALING_WT_POS = 1.0;      
-const MOD_DESTINATION_SCALING_RATIO_MOD = 1.0;   
+const MOD_DESTINATION_SCALING_RATIO_MOD = 1.0;  
 const MOD_DESTINATION_SCALING_ENV_TIME = 2.0;    
 const MOD_DESTINATION_SCALING_ENV_SUSTAIN = 0.5; 
 
@@ -242,14 +241,7 @@ export class Voice {
     return units;
   }
 
-  public noteOn(params: {
-    osc: OscillatorParams,
-    filter: FilterParams,
-    lfo: LfoParams,
-    envelope: EnvelopeParams,
-    noise: NoiseParams,
-    modMatrix: ModMatrixParams,
-  }, time: number): void {
+  public noteOn(params: AllInstrumentParams, time: number): void {
     if (this.isDisposed) return;
     const t = time;
     this.lfoStartTime = t;
@@ -336,7 +328,7 @@ export class Voice {
       this.mainEnvelopeVcaY.gain.linearRampToValueAtTime(fixedLevel, t + RAMP_TIME);
       this.envelopeSignalOutput.gain.linearRampToValueAtTime(fixedLevel, t + RAMP_TIME);
       if (params.noise.isNoiseEnabled) {
-         this.noiseVcaGain.gain.linearRampToValueAtTime(params.noise.noiseLevel * fixedLevel, t + RAMP_TIME);
+          this.noiseVcaGain.gain.linearRampToValueAtTime(params.noise.noiseLevel * fixedLevel, t + RAMP_TIME);
       }
     }
 
@@ -417,9 +409,9 @@ export class Voice {
 
     // Schedule stop for LFO
     if (this.lfoHasBeenStarted) {
-      const actualLfoStopTime = Math.max(this.lfo.context.currentTime, nodeStopTime);
-      try { this.lfo.stop(actualLfoStopTime); } catch(e) {}
-      this.lfoHasBeenStarted = false;
+        const actualLfoStopTime = Math.max(this.lfo.context.currentTime, nodeStopTime);
+        try { this.lfo.stop(actualLfoStopTime); } catch(e) {}
+        this.lfoHasBeenStarted = false;
     }
     
     // Schedule disposal of the voice object
@@ -486,9 +478,10 @@ export class Voice {
     ) => {
         units.forEach((unit, i) => {
             let detuneOffset = 0;
+            // FIX: Guard against division by zero when numVoices is 1
             if (numVoices > 1) {
                 detuneOffset = (i / (numVoices - 1) - 0.5) * 2 * detuneRangeCents;
-                if (oscPath === 'Y') detuneOffset *= 0.9; // Slightly different detune for Y for stereo interest
+                if (oscPath === 'Y') detuneOffset *= 0.9; // Slightly different detune for Y
             }
             const freq = this._baseFrequency * ratio;
 
@@ -527,15 +520,15 @@ export class Voice {
                         const tableDefinition2D = WAVETABLE_DEFINITIONS[wavetableId];
                         if (tableDefinition2D && tableDefinition2D.length > 0) {
                             sampleFrames2D = tableDefinition2D.map(rowWaveforms => {
-                               if (!rowWaveforms || rowWaveforms.length === 0) {
-                                   // Fallback for empty row
-                                   return [WaveformUtils.getSamples(Waveform.SINE, DEFAULT_TABLE_SIZE)];
-                               }
-                               return rowWaveforms.map(wfType => WaveformUtils.getSamples(wfType, DEFAULT_TABLE_SIZE));
+                                if (!rowWaveforms || rowWaveforms.length === 0) {
+                                    // Fallback for empty row
+                                    return [WaveformUtils.getSamples(Waveform.SINE, DEFAULT_TABLE_SIZE)];
+                                }
+                                return rowWaveforms.map(wfType => WaveformUtils.getSamples(wfType, DEFAULT_TABLE_SIZE));
                             });
                         } else {
                             // Fallback if table definition not found
-                             sampleFrames2D = [[WaveformUtils.getSamples(Waveform.SINE, DEFAULT_TABLE_SIZE)]];
+                                sampleFrames2D = [[WaveformUtils.getSamples(Waveform.SINE, DEFAULT_TABLE_SIZE)]];
                         }
                     }
 
@@ -560,13 +553,14 @@ export class Voice {
             }
 
             if (unit.panner) {
+                // FIX: Guard against division by zero when numVoices is 1
                 let panValue = 0;
                 if (numVoices > 1 && params.unisonSpread > 0) {
-                  panValue = (i / (numVoices - 1) - 0.5) * 2 * params.unisonSpread;
-                  if (oscPath === 'Y') panValue *= -1; // Opposite pan for Y for stereo width
+                    panValue = (i / (numVoices - 1) - 0.5) * 2 * params.unisonSpread;
+                    if (oscPath === 'Y') panValue *= -1;
                 }
                 unit.panner.pan.cancelScheduledValues(t);
-                unit.panner.pan.setValueAtTime(unit.panner.pan.value, t); // Start from current value
+                unit.panner.pan.setValueAtTime(unit.panner.pan.value, t);
                 unit.panner.pan.linearRampToValueAtTime(panValue, rampTargetTime);
             }
         });
@@ -661,7 +655,6 @@ export class Voice {
     const noteDurationInBeats = (beatsPerBar / denominator) * numerator * multiplier;
     const noteDurationInSeconds = (60 / bpm) * noteDurationInBeats;
     
-    // Rate is 1 / duration
     return noteDurationInSeconds > 0 ? 1 / noteDurationInSeconds : 1; // Avoid division by zero
   }
 
@@ -678,7 +671,7 @@ export class Voice {
       for (let i = 0; i < numPoints; i++) {
         // Change value at the start of each "sample" period
         if (i === 0 || (i * stepDuration * rateHz) % 1 < (stepDuration * rateHz)) { // Approximation of sample change
-             lastValue = Math.random() * 2 - 1;
+            lastValue = Math.random() * 2 - 1;
         }
         curve[i] = lastValue;
       }
@@ -757,7 +750,7 @@ export class Voice {
         case LfoTarget.FILTER_XY:
             connectLfoToParam(this.filterX.frequency);
             connectLfoToParam(this.filterY.frequency);
-          break;
+            break;
         case LfoTarget.PHASE:
           targetGainValue = lfoParams.depth * 0.01; // Scale depth for phase (e.g. 0-1 depth -> 0-0.01s delay)
           connectLfoToParam(this.phaseDelay.delayTime);
@@ -923,7 +916,7 @@ export class Voice {
         case ModDestination.VCA_X_LEVEL: targetAudioParam = this.modVcaGainX.gain; destinationScaling = MOD_DESTINATION_SCALING_VCA_GAIN; break;
         case ModDestination.VCA_Y_LEVEL: targetAudioParam = this.modVcaGainY.gain; destinationScaling = MOD_DESTINATION_SCALING_VCA_GAIN; break;
         case ModDestination.VCA_XY_LEVEL: multipleTargets = true; destinationScaling = MOD_DESTINATION_SCALING_VCA_GAIN; break;
-        case ModDestination.LFO1_RATE: targetAudioParam = this.lfo.frequency; destinationScaling = MOD_DESTINATION_SCALING_LFO_RATE_HZ; break;
+        case ModDestination.LFO1_RATE: targetAudioParam = this.lfo.frequency; destinationScaling = MOD_DESTination_SCALING_LFO_RATE_HZ; break;
         case ModDestination.LFO1_DEPTH: targetAudioParam = this.lfoGain.gain; destinationScaling = MOD_DESTINATION_SCALING_LFO_DEPTH; break;
         case ModDestination.OSC_X_WAVETABLE_POS: this.subOscsX.forEach(u => { if (u.isWorklet) targetAudioParam = this._getOscParam(u, 'morphPositionX'); }); destinationScaling = MOD_DESTINATION_SCALING_WT_POS; break;
         case ModDestination.OSC_Y_WAVETABLE_POS: this.subOscsY.forEach(u => { if (u.isWorklet) targetAudioParam = this._getOscParam(u, 'morphPositionY'); }); destinationScaling = MOD_DESTINATION_SCALING_WT_POS; break;
@@ -957,7 +950,7 @@ export class Voice {
             (this.modSlotConnections[slotIndex] as ModSlotConnection).targetParam = targetAudioParam;
         }
     } else {
-       // If no targetAudioParam was found (e.g., trying to mod WT pos on non-worklet osc), clear connection
+        // If no targetAudioParam was found (e.g., trying to mod WT pos on non-worklet osc), clear connection
        this.modSlotConnections[slotIndex] = null;
     }
   }
@@ -1132,11 +1125,11 @@ export class Voice {
             // This requires lfoCustomShapeCurve to be updated whenever rate or shape changes.
             // For simplicity in this direct calculation, we might just return a new random value
             // or use a simplified logic if lfoCustomShapeCurve is not directly usable here.
-             if (this.lfoCustomShapeCurve && this.lfoCustomShapeCurve.length > 0) {
-                const idx = Math.floor(phase * this.lfoCustomShapeCurve.length);
-                return this.lfoCustomShapeCurve[idx]; // Assumes curve is -1 to 1
-            }
-            return Math.random() * 2 - 1; // Fallback
+                if (this.lfoCustomShapeCurve && this.lfoCustomShapeCurve.length > 0) {
+                    const idx = Math.floor(phase * this.lfoCustomShapeCurve.length);
+                    return this.lfoCustomShapeCurve[idx]; // Assumes curve is -1 to 1
+                }
+                return Math.random() * 2 - 1; // Fallback
         case Waveform.RANDOM_SMOOTH:
             if (this.lfoCustomShapeCurve && this.lfoCustomShapeCurve.length > 0) {
                 const idx = phase * (this.lfoCustomShapeCurve.length -1); // Interpolate
@@ -1174,9 +1167,9 @@ export class Voice {
 
         // Check if this slot targets an envelope parameter
         const isEnvParamDest = slot.destination === ModDestination.ENV1_ATTACK ||
-                               slot.destination === ModDestination.ENV1_DECAY ||
-                               slot.destination === ModDestination.ENV1_SUSTAIN ||
-                               slot.destination === ModDestination.ENV1_RELEASE;
+                                slot.destination === ModDestination.ENV1_DECAY ||
+                                slot.destination === ModDestination.ENV1_SUSTAIN ||
+                                slot.destination === ModDestination.ENV1_RELEASE;
         if (!isEnvParamDest) return;
 
         let sourceValue = 0;

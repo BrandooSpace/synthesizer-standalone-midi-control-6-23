@@ -1,4 +1,3 @@
-
 import {
   OscillatorParams, FilterParams, LfoParams, EnvelopeParams, Waveform, LfoTarget, ActiveNoteNode,
   DelayParams, RingModParams, WaveshaperParams, StereoWidthParams, NoiseParams, NoiseType, ReverbParams,
@@ -127,9 +126,9 @@ class WavetableOscillatorProcessor extends AudioWorkletProcessor {
       if (numRows === 1 && numCols === 1) {
         finalInterpolatedFrame = frameTL;
       } else {
-         const topInterpolated = this._interpolateFrames(frameTL, frameTR, xFactor, frameLength);
-         const bottomInterpolated = this._interpolateFrames(frameBL, frameBR, xFactor, frameLength);
-         finalInterpolatedFrame = this._interpolateFrames(topInterpolated, bottomInterpolated, yFactor, frameLength);
+          const topInterpolated = this._interpolateFrames(frameTL, frameTR, xFactor, frameLength);
+          const bottomInterpolated = this._interpolateFrames(frameBL, frameBR, xFactor, frameLength);
+          finalInterpolatedFrame = this._interpolateFrames(topInterpolated, bottomInterpolated, yFactor, frameLength);
       }
       
       const readIndexUnscaled = this.phase / (2 * Math.PI); // 0 to 1
@@ -306,7 +305,7 @@ export class AudioEngine {
     if (!this.audioContext) return;
     const now = this.audioContext.currentTime;
     this.activeNotes.forEach(noteNode => noteNode.voiceInstance.updateLfoParams(this.currentLfoParams, this.currentFilterParams, now));
-     if (this.activeNotes.size > 0) {
+      if (this.activeNotes.size > 0) {
       this.activeNotes.forEach(noteNode => {
         noteNode.voiceInstance.updateModMatrixParams(
           this.currentModMatrixParams,
@@ -765,7 +764,7 @@ export class AudioEngine {
 
   public updateReverbParams(params: ReverbParams): void {
     this.currentReverbParams = { ...params };
-     if (!this.audioContext || !this.reverbEffect || !this.masterReverbSendGainNode ||
+      if (!this.audioContext || !this.reverbEffect || !this.masterReverbSendGainNode ||
         !this.reverbReturnGainNode || !this.masterGain || !this.postInsertChainTapNode) return;
 
     const now = this.audioContext.currentTime;
