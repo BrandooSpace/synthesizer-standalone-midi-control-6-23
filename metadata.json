@@ -1,0 +1,8 @@
+{
+  "name": "midi fixed oscilattor update synth 6/20",
+  "description": "A professional-level audio synthesizer with an interactive X-Y oscilloscope plotter, built with React, TypeScript, and Tailwind CSS. Features draggable effect windows, virtual keyboard, and customizable sound parameters.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "prompt": ""
+}
